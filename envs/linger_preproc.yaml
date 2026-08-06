@@ -1,0 +1,38 @@
+name: linger_preproc
+channels:
+  - bioconda
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+
+  # ── Core single-cell stack ────────────────────────────────────────────────
+  - scanpy>=1.10
+  - anndata>=0.10
+  - numpy>=1.24
+  - pandas>=2.0
+  - scipy>=1.11
+  - scikit-learn>=1.3
+
+  # ── ATAC / peak tools ─────────────────────────────────────────────────────
+  - bedtools=2.31.1
+
+  # ── Plotting ───────────────────────────────────────────────────────────────
+  - matplotlib>=3.7
+  - seaborn>=0.13
+
+  # ── Batch integration + clustering (Module 3) ─────────────────────────────
+  - leidenalg>=0.10
+  - igraph>=0.10
+
+  - pip:
+      - scrublet>=0.2.3
+      - snapatac2==2.9.0        # pinned — see 02c script docstring: import API
+                                 # differs across versions (snap.pp.import_data
+                                 # doesn't exist in 2.9.0, use import_fragments)
+      - harmonypy>=0.0.10,<0.1.0  # pinned <0.1.0: Z_corr orientation (PCs×cells) matches
+                                   # what scanpy's harmony_integrate .T expects — see
+                                   # scverse/scanpy#3940, harmonypy>=0.1.0 changed
+                                   # Z_corr to cells×PCs and breaks the wrapper's transpose
+                                   # (Module 3 batch correction, chosen 2026-07-21)

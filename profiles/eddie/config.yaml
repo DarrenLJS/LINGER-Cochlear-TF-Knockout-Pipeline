@@ -1,0 +1,34 @@
+# =============================================================================
+# profiles/eddie/config.yaml
+# Snakemake profile for Eddie (SGE cluster) — mirrored from the
+# tRNA-seq Three-pass Alignment pipeline's eddie_profile_config.yaml, but
+# kept in-repo rather than requiring a copy to ~/.config/snakemake/eddie/.
+#
+# Snakemake's --profile flag accepts any directory containing a config.yaml,
+# not just entries under ~/.config/snakemake/ — so this ships with the repo
+# and stays version-controlled alongside the rules/config it's paired with.
+#
+# Invoked via, from the repo root: snakemake --profile profiles/eddie
+# (or an absolute/relative path to this directory from anywhere else)
+# =============================================================================
+
+executor: sge
+jobs: 100                  # max concurrent SGE jobs submitted at once
+latency-wait: 60           # seconds to wait for output files after job ends (NFS latency)
+use-conda: true            # activate per-rule conda envs (envs/*.yaml)
+rerun-incomplete: true     # re-run jobs whose output files are incomplete
+keep-going: true           # continue submitting independent jobs if one fails
+
+# ---------------------------------------------------------------------------
+# Default resources applied to every job unless the rule overrides them.
+# NOTE: mem_mb is intentionally omitted — the snakemake-executor-plugin-sge
+# maps mem_mb to both h_vmem AND tmem; Eddie does not support tmem.
+# Memory is instead specified directly via sge_extra in each rule, built by
+# the sge_extra() helper in the Snakefile from config["resources"].
+# ---------------------------------------------------------------------------
+default-resources:
+  runtime: 240             # 4 hours; override in rules that need longer
+  threads: 1
+  mem_mb: 0
+  disk_mb: 0
+  sge_extra: "-V -l h_vmem=8000M"

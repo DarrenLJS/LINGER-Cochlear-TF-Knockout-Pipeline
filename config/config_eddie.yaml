@@ -1,0 +1,558 @@
+# =============================================================================
+# config/config_eddie.yaml
+# Single source of truth for paths, sample manifest, and SGE resources.
+#
+# This is sample_config.py's SAMPLES / EXTRA_* / QC_PARAMS, ported to YAML so
+# the Snakefile can build the DAG from it directly, plus a `resources:` block
+# following the same pattern as the tRNA-seq pipeline's config_eddie.yaml
+# (sge_extra() helper in the Snakefile reads it — see Snakefile docstring).
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Core paths
+# ---------------------------------------------------------------------------
+multiome_root: "/exports/eddie/scratch/s2906787/cochlear_datasets/01_multiome"
+chrom_root:    "/exports/eddie/scratch/s2906787/cochlear_datasets/02_chromatin_priors"
+scratch:       "/exports/eddie/scratch/s2906787/linger_pipeline/preprocessed"
+
+references:
+  mm10_chrom_sizes: "/exports/eddie/scratch/s2906787/linger_pipeline/references/mm10/mm10.chrom.sizes"
+
+# ---------------------------------------------------------------------------
+# SAMPLES — paired multiome, Module 1/2's main path.
+# One entry per sample_id. `type` selects the loader in
+# workflow/scripts/qc_lib.py (h5_combined / mtx_combined / mtx_separate).
+#
+# GSE182202_P1 is excluded — its ATAC fragments file (GSM6883296) was
+# confirmed to be a mislabeled duplicate of GSE182202_P8's fragments
+# (GSM6883298), 4996/4996 barcodes identical. RNA (GSM6883295) is genuinely
+# independent and is rerouted to extra_bulk_rna_inputs below.
+# GSE224563_P8 (GSM7026050) is excluded — its ATAC fragments file was
+# confirmed byte-identical (md5sum) to GSE182202_P8's. Kept as GSE182202_P8
+# only, to avoid double-counting one biological sample in Module 3.
+# ---------------------------------------------------------------------------
+samples:
+  - sample_id: GSE182202_P8
+    dataset: GSE182202
+    type: mtx_combined
+    combined_prefix: "{multiome_root}/GSE182202/GSM6883297_P8_cochlea_wildtype_10x_scRNA_scATAC_filtered_feature_bc_matrix_"
+    atac_fragments:  "{multiome_root}/GSE182202/GSM6883298_P8_cochlea_wildtype_10x_scRNA_scATAC_atac_fragments.tsv.gz"
+    # Manual override — automatic Scrublet thresholding reproduced two wildly
+    # different results across reruns of this exact input (38.6% vs ~0%
+    # doublets). 0.05 read off doublet_scores.png: the singlet peak for this
+    # sample sits almost entirely below ~0.04-0.05. Cross-checked in the
+    # 2026-07-21 sanity-check pass: manual threshold (38.17%) converged with
+    # the original automatic run (38.6%), independently — treated as the
+    # sample's real doublet rate, not thresholding noise. See doublet_scores.png
+    # caveat in qc_lib.py before re-litigating this number.
+    scrublet_manual_threshold: 0.05
+
+  - sample_id: GSE224563_P1
+    dataset: GSE224563
+    type: h5_combined
+    h5_path:        "{multiome_root}/GSE224563/GSM7026046_P1_wildtype_10x_scRNA_scATAC_filtered_feature_bc_matrix.h5"
+    atac_fragments:  "{multiome_root}/GSE224563/GSM7026047_P1_wildtype_10x_scRNA_scATAC_atac_fragments.tsv.gz"
+
+  - sample_id: GSE224563_P70_wildtype
+    dataset: GSE224563
+    type: h5_combined
+    h5_path:        "{multiome_root}/GSE224563/GSM7026050_P70_cochlea_wildtype_10x_scRNA_scATAC_filtered_feature_bc_matrix.h5"
+    atac_fragments:  "{multiome_root}/GSE224563/GSM7026051_P70_cochlea_wildtype_10x_scRNA_scATAC_atac_fragments.tsv.gz"
+
+  - sample_id: GSE224563_P70_deafened
+    dataset: GSE224563
+    type: h5_combined
+    h5_path:        "{multiome_root}/GSE224563/GSM7026052_P70_cochlea_deafened_10x_scRNA_scATAC_filtered_feature_bc_matrix.h5"
+    atac_fragments:  "{multiome_root}/GSE224563/GSM7026053_P70_cochlea_deafened_10x_scRNA_scATAC_atac_fragments.tsv.gz"
+
+# ---------------------------------------------------------------------------
+# EXTRA_BULK_RNA_INPUTS — rerouted RNA, not part of the paired-multiome DAG.
+# Consumed by Module 7 (bulk TF activity), not Modules 1-3.
+#
+# Backfilled 2026-07-24 from 3 -> 38 entries: the 3 original samples, plus
+# all 34 accessions in download_datasets.sh's BULK_ACCESSIONS array, plus
+# GSE150002_P1SC_reprogramming (reclassified here — script comment called it
+# "notch_dapt" tuning data, but it's actually bulk RNA and lives under
+# 04_bulk_rnaseq on disk, not 05_tuning_validation).
+# `path` points at the raw download folder — the actual RNA count-matrix
+# filenames vary per GSE and need per-dataset loader logic in Module 7's
+# script (same three-loader pattern as qc_lib.py's LOADERS dict), not a
+# fixed rna_prefix the way the paired-multiome samples above have.
+# ---------------------------------------------------------------------------
+extra_bulk_rna_inputs:
+  - sample_id: GSE182202_P1_RNA
+    dataset: GSE182202
+    rna_prefix: "{multiome_root}/GSE182202/GSM6883295_P1_cochlea_wildtype_10x_scRNA_scATAC_filtered_feature_bc_matrix_"
+    region: P1
+  - sample_id: GSE157398_Apex_RNA
+    dataset: GSE157398
+    rna_prefix: "{multiome_root}/GSE157398/GSM4764088_Cochlear_scRNAseq_Apex_"
+    region: Apex
+  - sample_id: GSE157398_Base_RNA
+    dataset: GSE157398
+    rna_prefix: "{multiome_root}/GSE157398/GSM4764089_Cochlear_scRNAseq_Base_"
+    region: Base
+  - sample_id: GSE150002_P1SC_reprogramming
+    dataset: GSE150002
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE150002_P1SC_reprogramming"
+  - sample_id: GSE111603
+    dataset: GSE111603
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE111603"
+  - sample_id: GSE111604
+    dataset: GSE111604
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE111604"
+  - sample_id: GSE113719
+    dataset: GSE113719
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE113719"
+  - sample_id: GSE116702
+    dataset: GSE116702
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE116702"
+  - sample_id: GSE120462
+    dataset: GSE120462
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE120462"
+  - sample_id: GSE129533
+    dataset: GSE129533
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE129533"
+  - sample_id: GSE139145
+    dataset: GSE139145
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE139145"
+  - sample_id: GSE149254
+    dataset: GSE149254
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE149254"
+  - sample_id: GSE149257
+    dataset: GSE149257
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE149257"
+  - sample_id: GSE163798
+    dataset: GSE163798
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE163798"
+  - sample_id: GSE193158
+    dataset: GSE193158
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE193158"
+  - sample_id: GSE198167
+    dataset: GSE198167
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE198167"
+  - sample_id: GSE203228
+    dataset: GSE203228
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE203228"
+  - sample_id: GSE213784
+    dataset: GSE213784
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE213784"
+  - sample_id: GSE239361
+    dataset: GSE239361
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE239361"
+  - sample_id: GSE240605
+    dataset: GSE240605
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE240605"
+  - sample_id: GSE242321
+    dataset: GSE242321
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE242321"
+  - sample_id: GSE242669
+    dataset: GSE242669
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE242669"
+  - sample_id: GSE256069
+    dataset: GSE256069
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE256069"
+  - sample_id: GSE262205
+    dataset: GSE262205
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE262205"
+  - sample_id: GSE266157
+    dataset: GSE266157
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE266157"
+  - sample_id: GSE268504
+    dataset: GSE268504
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE268504"
+  - sample_id: GSE271610
+    dataset: GSE271610
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE271610"
+  - sample_id: GSE275243
+    dataset: GSE275243
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE275243"
+  - sample_id: GSE294736
+    dataset: GSE294736
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE294736"
+  - sample_id: GSE296324
+    dataset: GSE296324
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE296324"
+  - sample_id: GSE299064
+    dataset: GSE299064
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE299064"
+  - sample_id: GSE300428
+    dataset: GSE300428
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE300428"
+  - sample_id: GSE312253
+    dataset: GSE312253
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE312253"
+  - sample_id: GSE312476
+    dataset: GSE312476
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE312476"
+  - sample_id: GSE329565
+    dataset: GSE329565
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE329565"
+  - sample_id: GSE83599
+    dataset: GSE83599
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE83599"
+  - sample_id: GSE85519
+    dataset: GSE85519
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE85519"
+  - sample_id: GSE90821
+    dataset: GSE90821
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE90821"
+
+# ---------------------------------------------------------------------------
+# EXTRA_CHROMATIN_PRIOR_INPUTS — consumed by Module 5, not Modules 1-3.
+# ---------------------------------------------------------------------------
+extra_chromatin_prior_inputs:
+  - sample_id: GSE157398_Apex_ATAC
+    dataset: GSE157398
+    atac_prefix:    "{multiome_root}/GSE157398/GSM4764090_Cochlear_scATACseq_Apex_"
+    atac_fragments: "{multiome_root}/GSE157398/GSM4764090_Cochlear_scATACseq_Apex_fragments.tsv.gz"
+    atac_peaks_bed: "{multiome_root}/GSE157398/GSM4764090_Cochlear_scATACseq_Apex_peaks.bed.gz"
+    region: Apex
+  - sample_id: GSE157398_Base_ATAC
+    dataset: GSE157398
+    atac_prefix:    "{multiome_root}/GSE157398/GSM4764091_Cochlear_scATACseq_Base_"
+    atac_fragments: "{multiome_root}/GSE157398/GSM4764091_Cochlear_scATACseq_Base_fragments.tsv.gz"
+    atac_peaks_bed: "{multiome_root}/GSE157398/GSM4764091_Cochlear_scATACseq_Base_peaks.bed.gz"
+    region: Base
+
+# ---------------------------------------------------------------------------
+# chromatin_prior_extra — Module 5. Reconciled against the ACTUAL disk layout
+# under 02_chromatin_priors/, not the HTML plan doc, which had two errors:
+#   - GSE150000 was described in the HTML as tuning-set RNA+ATAC data, but is
+#     actually H3K4me3 mark data and lives under 02_chromatin_priors on disk
+#     (GSE150000_P1SC_H3K4me3). Treated here as a chromatin prior.
+#   - GSE288375 was labelled "ATAC" in the HTML's dataset table, but the
+#     downloaded folder is GSE288375_ihc_ohc_rna (RNA), paired with
+#     GSE288376_ihc_ohc_atac (ATAC) for the same IHC/OHC subtypes.
+# NOTE (see README's "Module 5 open question"): LINGER's public API has no
+# native ingestion path for Hi-C loops or CUT&RUN peaks as GRN-inference
+# priors — only motif-based TF-RE binding (HOMER) and RE-TG genomic distance
+# are used internally by method='scNN'. Hi-C/CUT&RUN are wired to Module 10
+# (benchmarking ground truth) for now; using them as inference-time priors
+# would need a bespoke change to LINGER's own training loop — see README.
+# ---------------------------------------------------------------------------
+chromatin_prior_extra:
+  - prior_id: GSE305205_hic
+    dataset: GSE305205
+    role: hic_loops
+    path: "{chrom_root}/GSE305205_hic"
+  - prior_id: GSE150386_cutrun_atoh1
+    dataset: GSE150386
+    role: cutrun
+    path: "{chrom_root}/GSE150386_cutrun_atoh1"
+  - prior_id: GSE150391_cutrun_pou4f3
+    dataset: GSE150391
+    role: cutrun
+    path: "{chrom_root}/GSE150391_cutrun_pou4f3"
+  - prior_id: GSE181307_cutrun
+    dataset: GSE181307
+    role: cutrun
+    path: "{chrom_root}/GSE181307_cutrun"
+  - prior_id: GSE181310_atac
+    dataset: GSE181310
+    role: atac_prior
+    path: "{chrom_root}/GSE181310_atac"
+  - prior_id: GSE288375_ihc_ohc_rna
+    dataset: GSE288375
+    role: subtype_rna              # corrected from "ATAC" in the HTML table
+    path: "{chrom_root}/GSE288375_ihc_ohc_rna"
+  - prior_id: GSE288376_ihc_ohc_atac
+    dataset: GSE288376
+    role: subtype_atac
+    path: "{chrom_root}/GSE288376_ihc_ohc_atac"
+  - prior_id: GSE150000_P1SC_H3K4me3
+    dataset: GSE150000
+    role: h3k4me3                  # reclassified from HTML's "tuning" role
+    path: "{chrom_root}/GSE150000_P1SC_H3K4me3"
+
+# ---------------------------------------------------------------------------
+# model_construction_refs — Module 6, baseline expression used during GRN
+# fitting. HTML text only names 3 of these (GSE135703/202920/283534); the
+# other 3 are present both on disk and in download_datasets.sh Section 3.
+# Included by default — tell me if any of these 3 should be excluded.
+# ---------------------------------------------------------------------------
+model_construction_refs:
+  - ref_id: GSE135703_adult_SC
+    dataset: GSE135703
+    path: "{chrom_root}/../03_model_construction/GSE135703_adult_SC"
+  - ref_id: GSE202920_P14_P28
+    dataset: GSE202920
+    path: "{chrom_root}/../03_model_construction/GSE202920_P14_P28"
+  - ref_id: GSE283534_mature_hc
+    dataset: GSE283534
+    path: "{chrom_root}/../03_model_construction/GSE283534_mature_hc"
+  - ref_id: GSE111349_sorted_ihc_ohc
+    dataset: GSE111349
+    path: "{chrom_root}/../03_model_construction/GSE111349_sorted_ihc_ohc"
+  - ref_id: GSE136196_stria
+    dataset: GSE136196
+    path: "{chrom_root}/../03_model_construction/GSE136196_stria"
+  - ref_id: GSE168041_sgn_lateralwall
+    dataset: GSE168041
+    path: "{chrom_root}/../03_model_construction/GSE168041_sgn_lateralwall"
+
+# ---------------------------------------------------------------------------
+# tuning_inputs — used to set parameters BEFORE held_out_inputs is touched.
+# GSE150000/GSE150002/GSE182202/GSE224563 correctly excluded — they live
+# elsewhere on disk (chromatin prior, bulk RNA, or duplicate multiome copy).
+# GSE289514 and GSE305163 each split into 2 sub-experiments on disk.
+# ---------------------------------------------------------------------------
+tuning_inputs:
+  - sample_id: GSE165662_adult_stria
+    dataset: GSE165662
+    path: "{multiome_root}/../05_tuning_validation/GSE165662_adult_stria"
+  - sample_id: GSE189798
+    dataset: GSE189798
+    path: "{multiome_root}/../05_tuning_validation/GSE189798"
+  - sample_id: GSE234926_P90_sensory
+    dataset: GSE234926
+    path: "{multiome_root}/../05_tuning_validation/GSE234926_P90_sensory"
+  - sample_id: GSE266947_small_rna
+    dataset: GSE266947
+    path: "{multiome_root}/../05_tuning_validation/GSE266947_small_rna"
+  - sample_id: GSE289514_serpine2
+    dataset: GSE289514
+    path: "{multiome_root}/../05_tuning_validation/GSE289514_serpine2"
+  - sample_id: GSE289514_serpine2_neonatal
+    dataset: GSE289514
+    path: "{multiome_root}/../05_tuning_validation/GSE289514_serpine2_neonatal"
+  - sample_id: GSE297020_aging
+    dataset: GSE297020
+    path: "{multiome_root}/../05_tuning_validation/GSE297020_aging"
+  - sample_id: GSE305163_otoferlin
+    dataset: GSE305163
+    path: "{multiome_root}/../05_tuning_validation/GSE305163_otoferlin"
+  - sample_id: GSE305163_otoferlin_rescue
+    dataset: GSE305163
+    path: "{multiome_root}/../05_tuning_validation/GSE305163_otoferlin_rescue"
+  - sample_id: GSE310246_ebf1
+    dataset: GSE310246
+    path: "{multiome_root}/../05_tuning_validation/GSE310246_ebf1"
+  - sample_id: GSE316951
+    dataset: GSE316951
+    path: "{multiome_root}/../05_tuning_validation/GSE316951"
+
+# ---------------------------------------------------------------------------
+# held_out_inputs — Module 9 POSITIVE checks only. Physically read-only on
+# disk (chmod 555 by download_datasets.sh Section 6) — do not reference this
+# block from any rule file except 09_validation.smk.
+# ---------------------------------------------------------------------------
+held_out_inputs:
+  - sample_id: GSE224627_GAP_reprogramming
+    dataset: GSE224627
+    path: "{multiome_root}/../06_held_out/GSE224627_GAP_reprogramming"
+    check: atoh1_gfi1_pou4f3_overexpression
+  - sample_id: GSE233559_Tbx2_OHC_IHC
+    dataset: GSE233559
+    path: "{multiome_root}/../06_held_out/GSE233559_Tbx2_OHC_IHC"
+    check: tbx2_conversion
+  - sample_id: GSE274279_aging_snRNAseq
+    dataset: GSE274279
+    path: "{multiome_root}/../06_held_out/GSE274279_aging_snRNAseq"
+    check: aging_vector
+  - sample_id: GSE153882_hc_aging
+    dataset: GSE153882
+    path: "{multiome_root}/../06_held_out/GSE153882_hc_aging"
+    check: aging_vector_support
+  - sample_id: GSE154833_stria_aging
+    dataset: GSE154833
+    path: "{multiome_root}/../06_held_out/GSE154833_stria_aging"
+    check: aging_vector_support
+  - sample_id: GSE196870_SNHL
+    dataset: GSE196870
+    path: "{multiome_root}/../06_held_out/GSE196870_SNHL"
+    check: aging_vector_support
+  - sample_id: GSE273939_TNF_organoids
+    dataset: GSE273939
+    path: "{multiome_root}/../06_held_out/GSE273939_TNF_organoids"
+    check: aging_vector_support
+
+# ---------------------------------------------------------------------------
+# negative_control_input — Module 9 NEGATIVE check only, kept in its own
+# block (not merged into held_out_inputs) per 2026-07-24 decision: must be
+# scored with an inverted pass/fail (should NOT reprogram).
+# ---------------------------------------------------------------------------
+negative_control_input:
+  sample_id: GSE281207_Tmie_control
+  dataset: GSE281207
+  path: "{multiome_root}/../07_negative_control/GSE281207_Tmie_control"
+  check: negative_control_must_not_reprogram
+
+# ---------------------------------------------------------------------------
+# QC thresholds — starting points, inspect QC plots before trusting on a full run.
+# ---------------------------------------------------------------------------
+qc_params:
+  min_genes_per_cell: 200
+  max_pct_mito: 15.0
+  min_peaks_per_cell: 500
+  min_cells_per_gene: 3
+  min_cells_per_peak: 3
+  scrublet_expected_doublet_rate: 0.06
+  scrublet_random_state: 0
+  merge_gap_bp: 0            # bedtools merge -d for consensus peak set
+
+# ---------------------------------------------------------------------------
+# Module 3 — integration & cell typing
+# ---------------------------------------------------------------------------
+integration:
+  method: harmony             # chosen 2026-07-21
+  batch_key: sample_id
+  n_hvgs: 3000
+  n_pcs: 30
+  leiden_resolution: 1.0
+  marker_genes:                # cochlear identity markers for annotation support
+    hair_cell: [Myo7a, Pou4f3, Gfi1]
+    outer_hair_cell: [Slc26a5]     # "Prestin"
+    supporting_cell: [Sox2, Hes1]
+  cluster_annotation_tsv: "{scratch}/module3_integration/cluster_annotation.tsv"
+
+# ---------------------------------------------------------------------------
+# Module 4-8 — LINGER core (GRN inference, TF activity, perturbation)
+#
+# method='scNN' — chosen because it's the ONLY LINGER training mode that
+# supports mouse natively (confirmed against installed LingerGRN==1.110
+# source, docs/scNN.md). The full atlas-scale-pretrained 'LINGER' method is
+# hardcoded to hg19/hg38 throughout preprocess.py/LL_net.py (hg19_hg38_pair.bed,
+# RE_gene_corr_hg19.bed, etc.) — not usable for this project's mouse data.
+#
+# GRNdir must point at LINGER's own downloadable reference bundle (the
+# "provide_data/" directory from their "Download the general gene regulatory
+# network" doc step) — NOT something this pipeline builds. See SETUP.md.
+# ---------------------------------------------------------------------------
+linger:
+  genome: mm10
+  method: scNN
+  activef: ReLU              # 'ReLU' | 'sigmoid' | 'tanh'
+  tss_distance_bp: 200000    # max RE-to-TG distance considered
+  # Real path, confirmed from setup_linger.sh Step 8's own summary output
+  # ("GRNdir = ${PROVIDE_DATA_DIR}/provide_data") — NOT references/, and
+  # note the doubled provide_data/provide_data (tarball extracted into a
+  # dir of the same name).
+  grn_dir: "/exports/eddie/scratch/s2906787/linger_pipeline/provide_data/provide_data"
+  # Pre-built conda envs from setup_linger.sh — reused directly (full path
+  # to the env's own directory, not a name) so Snakemake's --use-conda
+  # does NOT try to rebuild them from envs/linger.yaml. Rebuilding risks
+  # exactly the anndata/scipy version conflict setup_linger.sh's own
+  # comments document hitting and fixing (Step 4's "WHY SO FEW PACKAGES"
+  # note) — reusing the already-verified env avoids re-litigating that.
+  # Confirmed 2026-07-25 via `conda env list` on Eddie — real paths are
+  # under the group-managed bioinfmsc anaconda install, NOT
+  # linger_pipeline/conda_envs/ as setup_linger.sh's ~/.condarc edit
+  # intended. `module load anaconda` on Eddie loads this group install,
+  # which took precedence — the personal envs_dirs redirect never applied.
+  conda_env_linger: "/exports/csce/eddie/biology/groups/bioinfmsc/anaconda/envs/s2906787/LINGER"
+  conda_env_tools:  "/exports/csce/eddie/biology/groups/bioinfmsc/anaconda/envs/s2906787/linger_tools"
+  # HOMER is a standalone Perl install (setup_linger.sh Step 9), not a
+  # conda package — call the binary directly rather than relying on PATH
+  # inside a conda env (avoids collision with a conda-provided homer).
+  homer_bin: "/exports/eddie/scratch/s2906787/linger_pipeline/homer/bin"
+  use_gpu: false              # flip to true once GPU access on `gpu` queue is confirmed
+  perturbation_genes:
+    - Atoh1
+    - Gfi1
+    - Pou4f3
+    - Tbx2
+  perturbation_combos:
+    - [Atoh1, Gfi1, Pou4f3]   # triple knockout, per HTML Module 8
+
+# ---------------------------------------------------------------------------
+# Computational resources — single source of truth for SGE memory/slot/
+# runtime tuning, read by sge_extra() in the Snakefile. Do not add
+# `sge_pe: "sharedmem"` to any rule (see Snakefile docstring for why — the
+# EDDIE profile runs with --cores 1, so sge_pe silently collapses every job
+# to one slot; hardcode slots via sge_extra instead, exactly as the
+# tRNA-seq pipeline's config_eddie.yaml does).
+# ---------------------------------------------------------------------------
+resources:
+
+  qc_preprocess_sample:
+    slots: 1
+    vmem_mb: 32000        # Scrublet's randomized PCA/SVD is the memory-heavy step
+    runtime_min: 120
+
+  extract_peaks:
+    slots: 1
+    vmem_mb: 4000
+    runtime_min: 30
+
+  merge_consensus_peaks:
+    slots: 1
+    vmem_mb: 4000
+    runtime_min: 30       # pure text sort/merge — lightweight, login-node safe
+
+  requantify_consensus:
+    slots: 4
+    vmem_mb: 8000
+    runtime_min: 240      # snapatac2 fragment import over full fragments.tsv.gz
+
+  sync_rna_atac_barcodes:
+    slots: 1
+    vmem_mb: 8000
+    runtime_min: 30
+
+  sanity_checks:
+    slots: 1
+    vmem_mb: 16000
+    runtime_min: 60
+
+  integrate_harmony:
+    slots: 4
+    vmem_mb: 32000        # HVG selection + PCA + Harmony + neighbors/UMAP over all samples pooled
+    runtime_min: 180
+
+  score_markers:
+    slots: 1
+    vmem_mb: 8000
+    runtime_min: 30
+
+  apply_cell_type_labels:
+    slots: 1
+    vmem_mb: 8000
+    runtime_min: 15
+
+  linger_get_tss:
+    slots: 1
+    vmem_mb: 8000
+    runtime_min: 30
+
+  # Added 2026-07-25 — this rule was previously reusing linger_get_tss's
+  # resources block (no entry of its own existed), which meant it inherited
+  # runtime_min: 30. HOMER's annotatePeaks.pl -m over the full consensus
+  # peak set x 1466 motifs genome-wide needs longer than that: qacct on the
+  # actual failed run showed "failed 44: execd enforced h_rt limit" (SIGKILL
+  # at exactly 30 min) while maxvmem was only ~2GB — memory was never the
+  # constraint, only runtime. vmem_mb kept modest since usage was nowhere
+  # near 8000M; runtime_min given generous headroom over the observed cutoff.
+  linger_motif_scan:
+    slots: 1
+    vmem_mb: 8000
+    runtime_min: 360
+
+  # Added 2026-07-25 — was reusing linger_get_tss's 8GB profile, which OOM'd.
+  # Real failure: LingerGRN.pseudo_bulk.pseudo_bulk() densifies the pooled
+  # ATAC matrix for sc.pp.scale() — 11639 cells x 41043 peaks x 8 bytes =
+  # 3.56 GiB for that ONE array, plus several more dense copies around it
+  # (RNA scaling, PCA workspace, .raw copies). 64GB is a generous margin
+  # over the observed minimum, not a tight fit — cheap insurance against
+  # hitting this same wall again on a slightly bigger intermediate.
+  # Bumped 2026-07-25 (64GB -> 100GB) — qacct on the actual failed run showed
+  # maxrss=24.095G / maxvmem=30.438G reached mid-step (during ATAC scaling,
+  # before RNA scaling + neighbor graph + PCA even ran) before SGE's h_rss
+  # enforcement killed it (see sge_extra() in Snakefile — h_rss wasn't being
+  # requested at all until this same fix). 64GB was headroom over the
+  # *originally estimated* single-array cost, not the real full-step peak.
+  linger_prep_pseudobulk:
+    slots: 1
+    vmem_mb: 100000
+    runtime_min: 120
+
+  linger_population_training:
+    slots: 8
+    vmem_mb: 32000
+    runtime_min: 480       # neural net training per chromosome, CPU default —
+                            # revisit once GPU access confirmed (see linger.use_gpu)
+
+  linger_celltype_grn:
+    slots: 4
+    vmem_mb: 32000
+    runtime_min: 360       # per cell type — multiplied by number of annotated clusters
