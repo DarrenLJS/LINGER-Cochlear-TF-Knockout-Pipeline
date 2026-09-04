@@ -523,10 +523,52 @@ resources:
   # at exactly 30 min) while maxvmem was only ~2GB — memory was never the
   # constraint, only runtime. vmem_mb kept modest since usage was nowhere
   # near 8000M; runtime_min given generous headroom over the observed cutoff.
+  #
+  # vmem_mb raised 2026-09-03 (first pass) — with runtime no longer the
+  # constraint, a real run got all the way to "Finding instances of 1466
+  # motif(s)" (genome-wide motif matching, the memory-heavy phase) before
+  # qacct showed "failed 46: execd enforced h_vmem limit", maxvmem 7.840G
+  # against this 8000M cap — walltime was fine (ru_wallclock ~5h15m, under
+  # the 6h runtime_min). Raised to 20000M for real headroom over the
+  # observed 7.84G peak, same margin-over-observed-peak pattern used for
+  # linger_prep_pseudobulk below.
+  #
+  # runtime_min raised 2026-09-03 (second pass) — with the OOM fixed, the
+  # very next run hit a NEW wall: qacct showed "failed 44: execd enforced
+  # h_rt limit" at ru_wallclock 21599.773s (killed at exactly the 360min
+  # cap), maxvmem only 9.599G (no OOM this time — memory fix held). The
+  # 04c_motif_scan.log tail showed the job still just past 0% into
+  # "Finding instances of 1466 motif(s)" after the full 6h — i.e. genome-
+  # wide motif matching across 224,626 sequences x 1466 motifs is just
+  # slow, not stuck. Considered parallelizing via annotatePeaks.pl's -p
+  # flag, but confirmed via `annotatePeaks.pl 2>&1 | grep -A2 "\-p "` that
+  # -p is "nearest peaks" (a second peak file for distance annotation),
+  # NOT a thread count — annotatePeaks.pl -m has no confirmed multithread
+  # flag (unlike findMotifsGenome.pl's real -p). Raised runtime_min to
+  # 2400 (40h) instead: `staging` queue's h_rt cap is 48:10:00 (qconf -sq
+  # staging), so 40h leaves ~8h of margin under the hard ceiling while
+  # giving genuine headroom over "barely past 0% at 6h". If this still
+  # isn't enough, the real fix is sharding consensus_peaks.bed across
+  # parallel annotatePeaks.pl processes (SGE array + merge step) rather
+  # than pushing runtime_min further toward the queue's cap.
+  #
+  # vmem_mb raised again 2026-09-04 (third pass) — the 20000M cap held for
+  # the OOM but the very next run (58047793, after runtime_min was already
+  # fixed) hit ANOTHER h_vmem kill: qacct showed "failed 46: execd enforced
+  # h_vmem limit" with maxvmem 19.922G against the 20000M cap, but this
+  # time ru_wallclock was 51908.687s (~14h25m) and the 04c_motif_scan.log
+  # progress bar was essentially fully filled (100% width) — i.e. memory
+  # usage in this HOMER phase scales with how much motif-instance data has
+  # accumulated over the run, not a fixed early-phase ceiling like the
+  # first OOM suggested. Raised to 40000M (~2x the observed 19.922G peak)
+  # for real margin over genuine completion-time usage rather than
+  # early-phase usage. runtime_min unchanged — wallclock has never been
+  # the actual bottleneck once memory was adequate (14h25m used of the
+  # 2400min/40h budget).
   linger_motif_scan:
     slots: 1
-    vmem_mb: 8000
-    runtime_min: 360
+    vmem_mb: 40000
+    runtime_min: 2400
 
   # Added 2026-07-25 — was reusing linger_get_tss's 8GB profile, which OOM'd.
   # Real failure: LingerGRN.pseudo_bulk.pseudo_bulk() densifies the pooled
