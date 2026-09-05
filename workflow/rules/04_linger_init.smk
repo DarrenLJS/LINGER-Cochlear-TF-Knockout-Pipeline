@@ -27,6 +27,16 @@ MODULE4_DIR = f"{SCRATCH}/module4_linger_init"
 LINGER_CFG = config["linger"]
 LINGER_PYTHON = f"{LINGER_CFG['conda_env_linger']}/bin/python"
 LINGER_ENV_BIN = f"{LINGER_CFG['conda_env_linger']}/bin"
+# Calling LINGER_PYTHON directly (see module docstring above) also skips the
+# LD_LIBRARY_PATH setup `conda activate` normally does, not just PATH.
+# Conda-forge builds (e.g. scipy's compiled _highs_wrapper.so, pulled in via
+# scipy.optimize <- scipy.stats <- LingerGRN.LINGER_tr) link against the
+# env's own bundled libstdc++, which is newer than some Eddie compute nodes'
+# system /lib64/libstdc++.so.6. Without this, the rule fails with
+# "GLIBCXX_3.4.30 not found" — but only on older-libstdc++ nodes, so it
+# doesn't reproduce every run. Confirmed 2026-09-05 (node1f16 failed this
+# way; node1n14 didn't, same env, same code).
+LINGER_ENV_LIB = f"{LINGER_CFG['conda_env_linger']}/lib"
 
 rule linger_prep_pseudobulk:
     input:
@@ -55,6 +65,9 @@ rule linger_prep_pseudobulk:
         # PATH even though the env has them. Restore that explicitly, same
         # pattern linger_motif_scan already uses for homer_bin below.
         export PATH="{LINGER_ENV_BIN}:$PATH"
+        # See LINGER_ENV_LIB comment above — restores conda-forge's compiled
+        # extensions' expected libstdc++, same reasoning as PATH above.
+        export LD_LIBRARY_PATH="{LINGER_ENV_LIB}:$LD_LIBRARY_PATH"
         {LINGER_PYTHON} workflow/scripts/linger_prep_pseudobulk.py \
             --labeled {input.labeled} \
             --atac-consensus {input.atac_consensus} \
@@ -92,6 +105,9 @@ rule linger_get_tss:
         # be. Restore it explicitly, same pattern linger_motif_scan
         # already uses for homer_bin below.
         export PATH="{LINGER_ENV_BIN}:$PATH"
+        # See LINGER_ENV_LIB comment above — restores conda-forge's compiled
+        # extensions' expected libstdc++, same reasoning as PATH above.
+        export LD_LIBRARY_PATH="{LINGER_ENV_LIB}:$LD_LIBRARY_PATH"
         {LINGER_PYTHON} workflow/scripts/linger_get_tss.py \
             --workdir {params.workdir} \
             --grn-dir {params.grn_dir} \
