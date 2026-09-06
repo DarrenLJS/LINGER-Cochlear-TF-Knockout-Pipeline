@@ -29,6 +29,20 @@ import scanpy as sc
 
 import LingerGRN.LL_net as LL_net
 
+import torch
+# FIX 2026-09-05, v2: same fix as grn_population_training.py — allowlisting
+# LINGER_tr.Net alone wasn't enough (weights_only=True unpickling walks the
+# whole object graph inside a saved Net, not just the outermost class; hit
+# torch.nn.modules.linear.Linear next in the real Eddie run). Monkeypatching
+# torch.load to default weights_only=False covers the whole graph in one
+# shot rather than allowlisting classes one at a time as they surface — see
+# grn_population_training.py's identical comment for the full explanation.
+_orig_torch_load = torch.load
+def _torch_load_default_unsafe(*a, **kw):
+    kw.setdefault("weights_only", False)
+    return _orig_torch_load(*a, **kw)
+torch.load = _torch_load_default_unsafe
+
 p = argparse.ArgumentParser()
 p.add_argument("--workdir", required=True)
 p.add_argument("--grn-dir", required=True)
@@ -41,7 +55,13 @@ p.add_argument("--output-done", required=True)
 args = p.parse_args()
 
 WORKDIR = args.workdir
-GRN_DIR = args.grn_dir
+GRN_DIR = args.grn_dir.rstrip("/") + "/"
+# FIX 2026-09-05: same bug as grn_population_training.py — LingerGRN's
+# LL_net functions (cell_type_specific_TF_RE_binding/_cis_reg/_trans_reg)
+# build GRNdir-relative paths via raw string concatenation with no
+# separator inserted (confirmed pattern: LINGER_tr.load_data_scNN crashed
+# on this exact class of bug at population-training time). Normalizing once
+# here rather than trusting every call site downstream.
 GENOME = args.genome
 CELLTYPE = args.celltype
 

@@ -63,17 +63,25 @@ rule linger_population_training:
     shell:
         r"""
         set -euo pipefail
-        exec &> {log}
+        exec &> "{log}"
+        # Same PATH/LD_LIBRARY_PATH restoration as 04_linger_init.smk's rules —
+        # LINGER_PYTHON is called by absolute path (bypassing `conda activate`),
+        # so the env's own bin/ (bedtools/intersectBed for pybedtools) and
+        # lib/ (conda-forge libstdc++, avoids GLIBCXX_3.4.30 not found on
+        # older-libstdc++ Eddie nodes) never land on PATH/LD_LIBRARY_PATH
+        # otherwise. See 04_linger_init.smk module docstring for the full story.
+        export PATH="{LINGER_ENV_BIN}:$PATH"
+        export LD_LIBRARY_PATH="{LINGER_ENV_LIB}:$LD_LIBRARY_PATH"
         {LINGER_PYTHON} workflow/scripts/grn_population_training.py \
-            --workdir {params.workdir} \
-            --grn-dir {params.grn_dir} \
-            --genome {params.genome} \
-            --activef {params.activef} \
-            --motif-bed {input.motif_bed} \
-            --labeled {input.labeled} \
+            --workdir "{params.workdir}" \
+            --grn-dir "{params.grn_dir}" \
+            --genome "{params.genome}" \
+            --activef "{params.activef}" \
+            --motif-bed "{input.motif_bed}" \
+            --labeled "{input.labeled}" \
             --atac-consensus {input.atac_consensus} \
             --sample-ids {params.sample_ids} \
-            --output-done {output.done}
+            --output-done "{output.done}"
         """
 
 
@@ -98,16 +106,21 @@ rule linger_celltype_grn:
     shell:
         r"""
         set -euo pipefail
-        exec &> {log}
+        exec &> "{log}"
+        # Same PATH/LD_LIBRARY_PATH restoration as 04_linger_init.smk's rules —
+        # see linger_population_training above and 04_linger_init.smk's
+        # module docstring for why this is needed.
+        export PATH="{LINGER_ENV_BIN}:$PATH"
+        export LD_LIBRARY_PATH="{LINGER_ENV_LIB}:$LD_LIBRARY_PATH"
         {LINGER_PYTHON} workflow/scripts/grn_celltype_specific.py \
-            --workdir {params.workdir} \
-            --grn-dir {params.grn_dir} \
-            --genome {params.genome} \
-            --celltype {wildcards.celltype} \
-            --labeled {input.labeled} \
+            --workdir "{params.workdir}" \
+            --grn-dir "{params.grn_dir}" \
+            --genome "{params.genome}" \
+            --celltype "{wildcards.celltype}" \
+            --labeled "{input.labeled}" \
             --atac-consensus {input.atac_consensus} \
             --sample-ids {params.sample_ids} \
-            --output-done {output.done}
+            --output-done "{output.done}"
         """
 
 

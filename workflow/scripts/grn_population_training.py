@@ -33,6 +33,31 @@ import anndata as ad
 import LingerGRN.LINGER_tr as LINGER_tr
 import LingerGRN.LL_net as LL_net
 
+import torch
+# FIX 2026-09-05, v2: add_safe_globals([LINGER_tr.Net]) (first attempt) got
+# further but wasn't enough — PyTorch's weights_only=True unpickler walks
+# the ENTIRE object graph inside a saved Net instance, not just the
+# outermost class, and hit torch.nn.modules.linear.Linear next (real error,
+# confirmed on Eddie). Allowlisting classes one at a time as they surface
+# means as many retries as there are distinct layer types inside Net
+# (Linear now, plausibly ReLU/Sequential/etc. next).
+#
+# Root cause: the installed LingerGRN version's torch.load() calls don't
+# pass weights_only=False at all (confirmed: the current PyPI 1.110 release
+# does, at every call site — this Eddie install predates that fix). Rather
+# than replicate that fix call-by-call across LL_net.py/LINGER_tr.py/
+# perturb.py (files we don't control, live in a shared conda env, would
+# need reapplying after any env rebuild), monkeypatch torch.load itself so
+# any call that doesn't explicitly pass weights_only defaults to False —
+# matching the trust judgment the package's own later release already
+# made for exactly these files (our own pipeline's freshly-generated
+# checkpoints, not untrusted downloads).
+_orig_torch_load = torch.load
+def _torch_load_default_unsafe(*a, **kw):
+    kw.setdefault("weights_only", False)
+    return _orig_torch_load(*a, **kw)
+torch.load = _torch_load_default_unsafe
+
 p = argparse.ArgumentParser()
 p.add_argument("--workdir", required=True)
 p.add_argument("--grn-dir", required=True)
@@ -46,7 +71,19 @@ p.add_argument("--output-done", required=True)
 args = p.parse_args()
 
 WORKDIR = args.workdir
-GRN_DIR = args.grn_dir
+GRN_DIR = args.grn_dir.rstrip("/") + "/"
+# FIX 2026-09-05: LingerGRN's own internal functions (LINGER_tr.load_data_scNN,
+# confirmed at LINGER_tr.py line 323) build paths as raw string concatenation
+# — `GRNdir + 'Match_TF_motif_' + species + '.txt'` — with NO separator
+# inserted. They assume the caller already passed GRNdir ending in '/'.
+# Passing --grn-dir without a trailing slash (as config_eddie.yaml's
+# linger.grn_dir currently does) produced a real crash on the first actual
+# run: FileNotFoundError on '.../provide_dataMatch_TF_motif_Mus_musculus.txt'
+# (note the missing '/' between 'provide_data' and 'Match_TF_motif').
+# os.path.join(GRN_DIR, "genome_map_homer.txt") below tolerates a missing
+# trailing slash and is NOT the affected call — only LINGER's own internal
+# concatenation is. Normalizing once here, rather than at every call site,
+# so this can't regress if another LINGER_tr/LL_net call is added later.
 GENOME = args.genome
 ACTIVEF = args.activef
 
@@ -67,7 +104,25 @@ species = genome_map.loc[GENOME]["species_ensembl"]
 print(f"genome={GENOME} -> species_ensembl={species} (from GRNdir/genome_map_homer.txt)")
 
 print(f"LINGER_tr.training(GRNdir, method='scNN', outdir={WORKDIR}, activef={ACTIVEF}, species={species})")
-LINGER_tr.training(GRN_DIR, "scNN", WORKDIR + "/", ACTIVEF, species)
+# RESUME GUARD, added 2026-09-05: training() has no resume logic of its own
+# and always retrains every chromosome from scratch — expensive (4h08m on
+# the last real run). If a prior run got all the way through training and
+# only failed on the *next* step (TF_RE_binding, the weights_only bug this
+# same patch fixes), re-deriving the same chromosome list training() itself
+# would compute and checking whether every {chr}_net.pt/{chr}_shap.pt
+# already exists lets us skip straight past it instead of burning another
+# 4+ hours to re-reach a step that's already fixed.
+re_tglink_path = os.path.join(WORKDIR, "data", "RE_gene_distance.txt")
+chrlist = sorted(pd.read_csv(re_tglink_path, sep="\t")["RE"].str.split(":").str[0].unique())
+already_done = all(
+    os.path.exists(os.path.join(WORKDIR, f"{c}_net.pt")) and os.path.exists(os.path.join(WORKDIR, f"{c}_shap.pt"))
+    for c in chrlist
+)
+if already_done:
+    print(f"RESUME: all {len(chrlist)} chromosome {{net,shap}}.pt files already present in {WORKDIR} — "
+          f"skipping LINGER_tr.training(), which has no partial-completion detection of its own.")
+else:
+    LINGER_tr.training(GRN_DIR, "scNN", WORKDIR + "/", ACTIVEF, species)
 
 print("Loading labeled RNA + pooled ATAC for TF_RE_binding()...")
 adata_RNA = sc.read_h5ad(args.labeled)

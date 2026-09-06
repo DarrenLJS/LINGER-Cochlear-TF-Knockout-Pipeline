@@ -590,11 +590,27 @@ resources:
 
   linger_population_training:
     slots: 8
-    vmem_mb: 32000
-    runtime_min: 480       # neural net training per chromosome, CPU default —
-                            # revisit once GPU access confirmed (see linger.use_gpu)
+    vmem_mb: 48000        # bumped 2026-09-05: real run hit maxvmem=30.9G
+                          # against the old 32000M grant (96% utilized) —
+                          # this isn't hypothetical, it nearly ran out.
+                          # TF_RE_binding() adds another adata_RNA/adata_ATAC
+                          # load on top of what training() already held, so
+                          # give real headroom rather than a token bump.
+    runtime_min: 600     # was 480 (8h); actual run used 4h09m for training
+                          # alone, TF_RE_binding()'s cost on top is unmeasured
+                          # (crashed before finishing) — 10h keeps ~2x margin
+                          # over the one real data point we have.
 
   linger_celltype_grn:
     slots: 4
-    vmem_mb: 32000
-    runtime_min: 360       # per cell type — multiplied by number of annotated clusters
+    vmem_mb: 48000        # bumped 2026-09-05, same reasoning as
+                          # linger_population_training: this rule reloads
+                          # the full pooled RNA/ATAC cohort per array task
+                          # (not just the one cell type it's computing),
+                          # before subsetting internally — same memory
+                          # profile as the rule that hit 30.9G/32000M.
+                          # Hasn't actually run yet, so this is precautionary,
+                          # not measured — watch qacct on the first task or
+                          # two once it does run.
+    runtime_min: 480     # was 360 (6h); bumped for the same margin-of-safety
+                          # reasoning, unmeasured for this rule specifically
