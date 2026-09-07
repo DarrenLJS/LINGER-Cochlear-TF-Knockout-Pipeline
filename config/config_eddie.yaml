@@ -566,9 +566,26 @@ resources:
   # the actual bottleneck once memory was adequate (14h25m used of the
   # 2400min/40h budget).
   linger_motif_scan:
-    slots: 1
-    vmem_mb: 40000
-    runtime_min: 2400
+    slots: 8              # bumped 2026-09-06: rule already reads this via
+                          # homer2 find -p {slots} (see 04_linger_init.smk)
+                          # and passes it to SGE's -pe sharedmem via
+                          # sge_extra() — no rule file change needed.
+                          # No existing Module 4 precedent for this value
+                          # (linger_get_tss/linger_prep_pseudobulk are both
+                          # slots: 1) — chosen to match Module 6's
+                          # linger_population_training scale given
+                          # comparable workload size (224,626 sequences x
+                          # 1,466 motifs), not measured against this rule
+                          # specifically.
+    vmem_mb: 48000        # was 40000; small precautionary bump for
+                          # multi-threaded per-thread overhead, unmeasured
+    runtime_min: 600      # was 2400 (40h); conservative ~4x reduction for
+                          # 8 threads, not naive 8x — I/O and per-sequence
+                          # overhead don't parallelize linearly. The one
+                          # real data point (single-threaded run) doesn't
+                          # tell us how this scales with -p 8; revisit
+                          # after the first multi-threaded run actually
+                          # completes.
 
   # Added 2026-07-25 — was reusing linger_get_tss's 8GB profile, which OOM'd.
   # Real failure: LingerGRN.pseudo_bulk.pseudo_bulk() densifies the pooled

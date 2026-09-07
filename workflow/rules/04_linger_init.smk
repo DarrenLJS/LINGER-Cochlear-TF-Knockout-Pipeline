@@ -127,12 +127,36 @@ rule linger_motif_scan:
     `conda:` directive here for that reason — this rule runs in the
     ambient shell with homer_bin prepended to PATH explicitly.
 
-    CONFIRMED 2026-07-24 against real Eddie output (previously a guess):
+    REWRITTEN 2026-09-06 after discovering the original annotatePeaks.pl
+    -mbed invocation was fundamentally wrong, confirmed by hand-testing on
+    Eddie against a 100-peak slice before committing to a full rerun:
+
+    - `annotatePeaks.pl ... -mbed <file>` writes a UCSC genome-browser BED
+      TRACK of motif locations (confirmed: real run produced only a
+      `track name=...` header line, zero data rows, because HOMER also
+      failed to open the motif file that run — a separate, apparently
+      transient issue that did NOT reproduce on manual retest).
+    - `LL_net.load_TFbinding_scNN()` (Module 6) expects a plain headed TSV
+      with columns literally named PositionID, Motif Name, MotifScore —
+      neither `-mbed`'s BED track NOR plain `annotatePeaks.pl -m`'s
+      "wide" per-peak table (motif hits jammed as tuples in one cell per
+      motif) match this schema.
+    - The actual matching format comes from HOMER's lower-level `homer2
+      find` tool: `homer2 find -i <fasta> -m <motifs> -offset 0` emits
+      exactly PositionID/Offset/Sequence/MotifName/Strand/MotifScore,
+      confirmed column-for-column against real Eddie output. It takes
+      pre-extracted FASTA (`-i`), not a peaks.bed + genome build the way
+      annotatePeaks.pl does — hence three steps now, not one.
+    - `homer2 find`'s raw output has NO header row (confirmed) — since
+      load_TFbinding_scNN() does `pd.read_csv(..., header=0)`, without a
+      prepended header it would silently misname every column instead of
+      failing loudly. Step 3 below adds it explicitly.
+
+    CONFIRMED 2026-07-24 (still true, unaffected by the above):
     - HOMER mm10 genome package IS installed (`configureHomer.pl -list`
       shows `+  mm10  v7.0`).
-    - motif_file is `all_motif_rmdup_Mammal`, not the placeholder
-      `all_motif_rmdup.motif` from the earlier draft — GRNdir splits this
-      by taxon (`_fly`, `_Mammal`, `_Plant`); mouse uses `_Mammal`.
+    - motif_file is `all_motif_rmdup_Mammal` — real file, 1.3MB, opens
+      fine on manual retest (CRLF line endings, harmless).
     - GRNdir also has `Match_TF_motif_Mus_musculus.txt` and
       `genome_map_homer.txt` — confirms the full scNN chain resolves:
       genome='mm10' -> genome_map_homer.txt -> species='Mus_musculus'
@@ -149,7 +173,13 @@ rule linger_motif_scan:
     params:
         genome     = LINGER_CFG["genome"],
         homer_bin  = LINGER_CFG["homer_bin"],
+        # Confirmed via the rule's own original log output ("Custom genome
+        # sequence directory: .../homer//data/genomes/mm10/") — HOMER
+        # itself derives this the same way, from its install root.
+        homer_genome_dir = f"{LINGER_CFG['homer_bin'].rsplit('/', 1)[0]}/data/genomes/{LINGER_CFG['genome']}/",
         motif_file = f"{LINGER_CFG['grn_dir']}/all_motif_rmdup_Mammal",
+        workdir    = MODULE4_DIR,
+        slots      = config["resources"]["linger_motif_scan"].get("slots", 1),
     log:
         f"{SCRATCH}/logs/04c_motif_scan.log",
     resources:
@@ -158,11 +188,29 @@ rule linger_motif_scan:
     shell:
         r"""
         set -euo pipefail
-        exec &> {log}
+        exec &> "{log}"
         export PATH="{params.homer_bin}:$PATH"
-        annotatePeaks.pl {input.consensus_bed} {params.genome} \
-            -m {params.motif_file} \
-            -mbed {output.motif_bed} \
-            > /dev/null
+
+        # Step 1: extract FASTA sequences for every consensus peak. HOMER
+        # auto-names unnamed peaks (our consensus_peaks.bed has no name
+        # column) as default-1, default-2, ... — confirmed on manual test,
+        # these become the PositionID values homer2 find reports.
+        homerTools extract "{input.consensus_bed}" "{params.homer_genome_dir}" -fa \
+            > "{params.workdir}/motif_scan_sequences.fa"
+
+        # Step 2: real motif-instance scan. -p uses this rule's granted
+        # slots (genome-wide: 224,719 peaks x 1,466 motifs, unlike the
+        # 100-peak manual test — parallelize rather than assume it's fast).
+        homer2 find -i "{params.workdir}/motif_scan_sequences.fa" \
+            -m "{params.motif_file}" -offset 0 -p {params.slots} \
+            > "{params.workdir}/motif_scan_raw.txt"
+
+        # Step 3: prepend the header load_TFbinding_scNN() requires —
+        # homer2 find's own output has none (confirmed).
+        printf "PositionID\tOffset\tSequence\tMotif Name\tStrand\tMotifScore\n" \
+            > "{output.motif_bed}"
+        cat "{params.workdir}/motif_scan_raw.txt" >> "{output.motif_bed}"
+
         echo "Wrote {output.motif_bed}"
         """
+
