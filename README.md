@@ -410,9 +410,10 @@ please cite them alongside this repository:
 
 ## Author
 
-[Your name] — cochlear GRN / TF-knockout pipeline, University of Edinburgh.
+Darren Lim Jia Sheng (DarrenLJS)
 
 ## License
 
+TODO
 Released under the MIT License — free to use, modify, and redistribute
 with attribution.
