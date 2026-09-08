@@ -7,12 +7,18 @@ docs/GRN_infer.md's documented usage pattern:
   LL_net.cell_type_specific_TF_RE_binding(GRNdir, adata_RNA, adata_ATAC,
                                            genome, celltype, outdir, method)
   LL_net.cell_type_specific_cis_reg(GRNdir, adata_RNA, adata_ATAC, genome,
-                                     method, outdir)      # NOTE: no celltype
-                                                           # arg in this one
-                                                           # per source — it
-                                                           # reads adata's
-                                                           # .obs['label']
-                                                           # internally
+                                     celltype, outdir, method)
+                                     # FIXED 2026-09-07: this WAS documented
+                                     # (wrongly) as taking no celltype arg,
+                                     # with method/outdir in the last two
+                                     # slots. Real source (confirmed via
+                                     # TypeError on Eddie: "missing 1
+                                     # required positional argument:
+                                     # 'method'") is celltype at position 5,
+                                     # outdir at 6, method LAST at 7 — the
+                                     # original call silently passed "scNN"
+                                     # as celltype and never supplied method
+                                     # at all.
   LL_net.cell_type_specific_trans_reg(GRNdir, adata_RNA, celltype, outdir)
 
 Outputs per cell type (per source, filenames LINGER writes itself):
@@ -92,7 +98,7 @@ LL_net.cell_type_specific_TF_RE_binding(
 )
 
 print("cell_type_specific_cis_reg()...")
-LL_net.cell_type_specific_cis_reg(GRN_DIR, adata_RNA, adata_ATAC, GENOME, "scNN", WORKDIR + "/")
+LL_net.cell_type_specific_cis_reg(GRN_DIR, adata_RNA, adata_ATAC, GENOME, CELLTYPE, WORKDIR + "/", "scNN")
 
 print("cell_type_specific_trans_reg()...")
 LL_net.cell_type_specific_trans_reg(GRN_DIR, adata_RNA, CELLTYPE, WORKDIR + "/")

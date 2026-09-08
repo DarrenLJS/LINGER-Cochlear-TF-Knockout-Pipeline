@@ -144,7 +144,30 @@ adata_ATAC.obs["barcode"] = adata_ATAC.obs_names
 print("LL_net.TF_RE_binding(method='scNN')...")
 LL_net.TF_RE_binding(GRN_DIR, adata_RNA, adata_ATAC, GENOME, "scNN", WORKDIR + "/")
 
+# ---------------------------------------------------------------------------
+# Added 2026-09-07: confirmed hard dependency, not optional. Module 6's OWN
+# cell_type_specific_cis_reg() (grn_celltype_specific.py) calls
+# load_RE_TG_scNN(outdir) internally, which reads
+# outdir+'cell_population_cis_regulatory.txt' — a file this script never
+# wrote before now. Confirmed via real FileNotFoundError on Eddie: EVERY
+# call to cell_type_specific_cis_reg(), in any mode, needs this file to
+# already exist. Originally added for Module 7's TF_activity.regulon(
+# network="cell population") instead, which needs
+# cell_population_trans_regulatory.txt — turns out both are required,
+# for two different reasons, and this one blocks Module 6 itself, not
+# just Module 7.
+#
+# Signatures confirmed directly against the real installed source
+# (cis_reg(GRNdir,adata_RNA,adata_ATAC,genome,method,outdir),
+# trans_reg(GRNdir,method,outdir,genome)) — not assumed.
+print("LL_net.cis_reg(method='scNN') [population-level]...")
+LL_net.cis_reg(GRN_DIR, adata_RNA, adata_ATAC, GENOME, "scNN", WORKDIR + "/")
+
+print("LL_net.trans_reg(method='scNN') [population-level]...")
+LL_net.trans_reg(GRN_DIR, "scNN", WORKDIR + "/", GENOME)
+
 with open(args.output_done, "w") as f:
     f.write(f"population training complete\nworkdir: {WORKDIR}\nspecies: {species}\n")
 
-print(f"\nDone. cell_population_TF_RE_binding.txt + RE_TGlink.txt + per-chr .pt files under {WORKDIR}/")
+print(f"\nDone. cell_population_TF_RE_binding.txt + cell_population_cis_regulatory.txt + "
+      f"cell_population_trans_regulatory.txt + RE_TGlink.txt + per-chr .pt files under {WORKDIR}/")
