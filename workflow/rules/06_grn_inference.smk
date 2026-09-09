@@ -36,6 +36,24 @@ def _cell_types():
 
 CELL_TYPES = _cell_types()
 
+# FIX 2026-09-08 — real cyclic-dependency bug, confirmed via a Snakemake
+# dry-run while integrating Module 7: linger_celltype_grn's output pattern
+# `{celltype}.done` is unconstrained, so Snakemake considers it a possible
+# (wildcard) producer of ANY `.done` file in MODULE6_DIR — including
+# `population_training.done` itself (celltype="population_training" is a
+# syntactically valid match). That was never triggered before because
+# nothing outside Module 6's own internal chain named
+# population_training.done as a direct target; Module 7's
+# linger_tf_activity_one rule is the first to do so, which made Snakemake
+# search for alternate producers and hit the self-referential route
+# (linger_celltype_grn(celltype="population_training") requires
+# population_training.done as its own input) -> CyclicGraphException.
+# Constraining celltype to the real, known values from cluster_annotation.tsv
+# closes this off without renaming any already-produced file on Eddie.
+import re
+wildcard_constraints:
+    celltype = "|".join(re.escape(c) for c in CELL_TYPES) if CELL_TYPES else "(?!)"
+
 
 rule linger_population_training:
     input:
@@ -46,6 +64,14 @@ rule linger_population_training:
         atac_consensus  = expand(f"{SCRATCH}/{{sample}}/atac_consensus.h5ad", sample=SAMPLES),
     output:
         done = f"{MODULE6_DIR}/population_training.done",
+        # Added 2026-09-08 — grn_population_training.py's cis_reg()/trans_reg()
+        # addition (see script's own 2026-09-07 docstring note) writes these
+        # two files but they were only ever tracked implicitly via `done`.
+        # Declaring them explicitly lets Snakemake's DAG treat them as real
+        # outputs — needed by Module 7's linger_tf_activity_one rule, which
+        # depends on cell_population_trans_regulatory.txt directly.
+        cis_regulatory   = f"{SCRATCH}/module4_linger_init/cell_population_cis_regulatory.txt",
+        trans_regulatory = f"{SCRATCH}/module4_linger_init/cell_population_trans_regulatory.txt",
     params:
         workdir    = f"{SCRATCH}/module4_linger_init",   # same workdir as Module 4 — see script docstring
         grn_dir    = LINGER_CFG["grn_dir"],
@@ -92,6 +118,17 @@ rule linger_celltype_grn:
         atac_consensus   = expand(f"{SCRATCH}/{{sample}}/atac_consensus.h5ad", sample=SAMPLES),
     output:
         done = f"{MODULE6_DIR}/{{celltype}}.done",
+        # Added 2026-09-08 — same reasoning as linger_population_training's
+        # output: block above. grn_celltype_specific.py already writes these
+        # three files per celltype (confirmed in its own docstring); they
+        # just weren't declared. Module 10's benchmark_grn_edges rule reads
+        # the cis + TF-RE files by this exact path pattern already — this
+        # just makes Snakemake's DAG aware of the real producer, so reruns/
+        # cache invalidation behave correctly instead of relying on the
+        # files already existing on disk from a prior manual run.
+        cis_regulatory    = f"{SCRATCH}/module4_linger_init/cell_type_specific_cis_regulatory_{{celltype}}.txt",
+        trans_regulatory  = f"{SCRATCH}/module4_linger_init/cell_type_specific_trans_regulatory_{{celltype}}.txt",
+        tf_re_binding     = f"{SCRATCH}/module4_linger_init/cell_type_specific_TF_RE_binding_{{celltype}}.txt",
     params:
         workdir    = f"{SCRATCH}/module4_linger_init",
         grn_dir    = LINGER_CFG["grn_dir"],

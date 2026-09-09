@@ -52,4 +52,29 @@ dependencies:
       - leidenalg
       - python-igraph
       - LingerGRN==1.105       # --no-deps in the real install — see above
+      # Added 2026-09-08 for Module 7's bulk_rna_loader.py Excel support
+      # (GSE129533/GSE256069 real .xlsx; GSE262205 real binary .xls;
+      # GSE271610 fake-.xls-labeled plain text, doesn't actually need
+      # either but the loader tries Excel first regardless). Installed
+      # live into the real env via `pip install openpyxl xlrd` — no
+      # version pin needed, neither package constrains numpy/pandas/scipy
+      # the way LingerGRN's own deps do (see WHY SO FEW PACKAGES note
+      # above), so this doesn't reopen the anndata/scipy conflict that
+      # note describes. openpyxl reads .xlsx (OOXML); xlrd is REQUIRED
+      # separately for real binary .xls (OOXML-only openpyxl cannot open
+      # legacy BIFF/OLE2 .xls — confirmed via GSE262205's real ImportError
+      # before xlrd was added).
+      - openpyxl
+      - xlrd
+      # Added 2026-09-09 — NOT a dependency of the pipeline's own
+      # production code (bulk_rna_loader.py/linger_tf_activity.py never
+      # import yaml). Needed by verify_loader_regression.py, the one-off
+      # regression-check driver script used to validate this loader
+      # rewrite against real Eddie data (parses config_eddie.yaml
+      # directly, outside Snakemake, to replay the real rule's resolved
+      # entries). Installed live via `pip install pyyaml`. Documented here
+      # anyway since that script runs inside this same LINGER env and a
+      # from-scratch rebuild should carry it too, even though it's a
+      # verification-tooling need rather than a pipeline-runtime one.
+      - pyyaml
 

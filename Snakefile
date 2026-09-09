@@ -94,6 +94,21 @@ EXTRA_CHROMATIN_PRIOR_CFG = _resolve(copy.deepcopy(config.get("extra_chromatin_p
 INTEGRATION_CFG           = _resolve(copy.deepcopy(config["integration"]))
 LINGER_CFG                = copy.deepcopy(config["linger"])  # not path-templated — grn_dir is absolute
 
+# Added for Modules 7-10 integration (2026-09-08) ----------------------------
+# model_construction_refs — Module 7's role="baseline" bucket (see
+# 07_bulk_tf_activity.smk header for why these route to Module 7, not 6).
+MODEL_CONSTRUCTION_REFS_CFG = _resolve(copy.deepcopy(config.get("model_construction_refs", [])))
+# chromatin_prior_extra — Module 10's benchmarking ground truth. Different
+# config key from EXTRA_CHROMATIN_PRIOR_CFG above (extra_chromatin_prior_inputs,
+# which feeds nothing in Modules 1-3's DAG) — do not conflate the two.
+EXTRA_CHROMATIN_PRIOR_CFG_FULL = _resolve(copy.deepcopy(config.get("chromatin_prior_extra", [])))
+# held_out_inputs / negative_control_input — Module 9's frozen validation
+# set. Kept in their own variables (not merged) per the repo's own
+# 2026-07-24 decision to score the negative control with inverted
+# pass/fail logic rather than folding it into the positive checks.
+HELD_OUT_CFG          = _resolve(copy.deepcopy(config.get("held_out_inputs", [])))
+NEGATIVE_CONTROL_CFG  = _resolve(copy.deepcopy(config.get("negative_control_input", {})))
+
 SAMPLES_BY_ID = {s["sample_id"]: s for s in SAMPLES_CFG}
 SAMPLES       = list(SAMPLES_BY_ID.keys())
 
@@ -133,8 +148,25 @@ include: "workflow/rules/02_consensus_peaks.smk"
 include: "workflow/rules/03_integration_celltyping.smk"
 include: "workflow/rules/04_linger_init.smk"
 include: "workflow/rules/06_grn_inference.smk"
-# 05_chromatin_priors.smk and 07-10 not yet built — see README "Module 5
-# open question" and the phase plan discussed 2026-07-24.
+include: "workflow/rules/07_bulk_tf_activity.smk"
+include: "workflow/rules/08_perturbation.smk"
+include: "workflow/rules/09_validation.smk"
+include: "workflow/rules/10_grn_benchmarking.smk"
+# 05_chromatin_priors.smk not built — Module 5 decided as Option A, folded
+# into Module 10's benchmarking (see README "Design notes"), not a
+# separate pipeline stage.
+#
+# Modules 6-10 are NOT added to `rule all` below, matching the existing
+# module6_all convention — each depends on the previous stage's real
+# output existing (not just its rule being defined), and Module 6 in
+# particular depends on the manual Module 3 labeling step. Run each
+# module's `_all` target explicitly once its prerequisites are done:
+#   module6_all  (Module 6 — GRN inference)
+#   module7_all  (Module 7 — bulk TF activity)
+#   module8_all  (Module 8 — perturbation; RUN linger_perturbation_sanity_check
+#                 first and read its log, see 08_perturbation.smk header)
+#   module9_all  (Module 9 — validation)
+#   benchmark_grn_edges  (Module 10 — GRN benchmarking; no dependency on 7-9)
 
 # ---------------------------------------------------------------------------
 # Target rule

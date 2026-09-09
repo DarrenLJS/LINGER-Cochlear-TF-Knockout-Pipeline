@@ -95,6 +95,12 @@ extra_bulk_rna_inputs:
   - sample_id: GSE150002_P1SC_reprogramming
     dataset: GSE150002
     path: "{multiome_root}/../04_bulk_rnaseq/GSE150002_P1SC_reprogramming"
+    # Confirmed real RSEM genes.results shape, same as GSE149254 (14 sibling files).
+    format: per_sample_merge
+    glob_pattern: "*.genes.results.txt.gz"
+    value_column: expected_count
+    id_column: gene_id
+    sample_name_regex: "^GSM\\d+_(.+)\\.genes\\.results\\.txt\\.gz$"
   - sample_id: GSE111603
     dataset: GSE111603
     path: "{multiome_root}/../04_bulk_rnaseq/GSE111603"
@@ -104,24 +110,89 @@ extra_bulk_rna_inputs:
   - sample_id: GSE113719
     dataset: GSE113719
     path: "{multiome_root}/../04_bulk_rnaseq/GSE113719"
+    # Confirmed header: gene,P1_T_1,...,P4_U_3,mgi_symbol — `gene` (index_col=0)
+    # is Ensembl (confirmed real data row: ENSMUSG00000000001), NOT a symbol,
+    # despite previously being bucketed as "Category A, clean". symbol_column
+    # redirects var_names to the real mgi_symbol column instead.
+    symbol_column: mgi_symbol
   - sample_id: GSE116702
     dataset: GSE116702
     path: "{multiome_root}/../04_bulk_rnaseq/GSE116702"
-  - sample_id: GSE120462
+    # Discovered during Module 7 regression verification (not the original
+    # 24-failure investigation — this "succeeded" under the old loader by
+    # silently building a 1-column matrix). Confirmed real shape: 4 sibling
+    # per-sample files, header has ONE field ("<sample>.accepted_hits")
+    # while data rows have TWO — the gene-id column has no header name at
+    # all, not a bug, just an unlabeled first column. index_col=0 handles
+    # this correctly (id_column omitted = implicit/unlabeled id column).
+    format: per_sample_merge
+    glob_pattern: "GSM*.txt.gz"
+    value_column_index: 0
+    sample_name_regex: "_(E\\d+.*)\\.txt\\.gz$"
+  # GSE120462 split into 2 entries 2026-09-08 — confirmed real data is
+  # CellRanger v2-style genome-keyed .h5 (schema: mm10plus2/{data,indices,
+  # indptr,shape,barcodes,gene_names,genes}, via h5py inspection), and the
+  # two files (GFP, Ikzf2) are different experimental conditions, not
+  # replicates — merging them into one Module 7 entry would blend two
+  # conditions into one TF-activity score.
+  - sample_id: GSE120462_GFP
     dataset: GSE120462
     path: "{multiome_root}/../04_bulk_rnaseq/GSE120462"
+    format: cellranger_h5
+    glob_patterns: ["GSM3401092_GFP_raw_gene_bc_matrices_h5.h5"]
+    h5_genome_key: mm10plus2
+  - sample_id: GSE120462_Ikzf2
+    dataset: GSE120462
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE120462"
+    format: cellranger_h5
+    glob_patterns: ["GSM3401093_Ikzf2_raw_gene_bc_matrices_h5.h5"]
+    h5_genome_key: mm10plus2
   - sample_id: GSE129533
     dataset: GSE129533
     path: "{multiome_root}/../04_bulk_rnaseq/GSE129533"
+    # Confirmed via header check (openpyxl): only usable file is .xlsx, real
+    # columns are ['gene','locus','FPKM-original','FPKM-new','log2(...)','p_value']
+    # — a 2-condition comparison (no per-replicate samples), not a normal
+    # counts matrix. Only 2 real sample-like columns exist for this dataset.
+    format: excel
+    sample_column_regex: "^FPKM-(original|new)$"
   - sample_id: GSE139145
     dataset: GSE139145
     path: "{multiome_root}/../04_bulk_rnaseq/GSE139145"
+    # Confirmed real per-sample files: gene_id, length, <sample>, <sample>_FPKM,
+    # GeneSymbol, KO, GO — value column's NAME is the sample name itself
+    # (varies per file), but its POSITION (index 2) is consistent, hence
+    # value_column_index rather than value_column.
+    format: per_sample_merge
+    glob_pattern: "GSM*.txt.gz"
+    value_column_index: 2
+    id_column: gene_id
+    symbol_column: GeneSymbol
+    sample_name_regex: "_(2mo-(?:wt|het)-\\d+)\\.txt\\.gz$"
   - sample_id: GSE149254
     dataset: GSE149254
     path: "{multiome_root}/../04_bulk_rnaseq/GSE149254"
+    # Confirmed real RSEM genes.results shape: gene_id, transcript_id(s),
+    # length, effective_length, expected_count, TPM, FPKM.
+    format: per_sample_merge
+    glob_pattern: "*.genes.results.txt.gz"
+    value_column: expected_count
+    id_column: gene_id
+    sample_name_regex: "^GSM\\d+_(.+)\\.genes\\.results\\.txt\\.gz$"
   - sample_id: GSE149257
     dataset: GSE149257
     path: "{multiome_root}/../04_bulk_rnaseq/GSE149257"
+    # Confirmed real RSEM ISOFORM-level shape: transcript_id, gene_id,
+    # length, effective_length, expected_count, TPM, FPKM, IsoPct — needs
+    # gene-level rollup (sum of isoform expected_count per gene_id), unlike
+    # the gene-level RSEM datasets above.
+    format: per_sample_merge
+    glob_pattern: "*.isoforms.results.tsv.gz"
+    value_column: expected_count
+    id_column: transcript_id
+    rollup: sum_by_gene
+    rollup_id_column: gene_id
+    sample_name_regex: "^GSM\\d+_(.+)\\.isoforms\\.results\\.tsv\\.gz$"
   - sample_id: GSE163798
     dataset: GSE163798
     path: "{multiome_root}/../04_bulk_rnaseq/GSE163798"
@@ -131,48 +202,178 @@ extra_bulk_rna_inputs:
   - sample_id: GSE198167
     dataset: GSE198167
     path: "{multiome_root}/../04_bulk_rnaseq/GSE198167"
+    # Discovered during Module 7 regression verification. Confirmed real
+    # shape: 8 sibling per-sample files, NO header line at all (numeric
+    # gene ids, e.g. "37135\t260") — pandas' default header=0 was silently
+    # consuming the first data row as a header, which is exactly what
+    # produced the misleading "kept=['260']" error before this was
+    # inspected directly. header: false forces correct headerless parsing.
+    format: per_sample_merge
+    glob_pattern: "GSM*.txt.gz"
+    value_column_index: 0
+    header: false
+    sample_name_regex: "_((?:WT|Mut)\\d+(?:-\\d+)?)\\.txt\\.gz$"
   - sample_id: GSE203228
     dataset: GSE203228
     path: "{multiome_root}/../04_bulk_rnaseq/GSE203228"
+    # Confirmed header has Count-*/FPKM-*/avgFPKM-* triplicated per sample
+    # plus geneID/geneSymbol — blanket numeric-coercion would wrongly keep
+    # FPKM/avgFPKM as fake extra "samples". Raw Count- columns chosen as
+    # the simplest single real-sample-column set (see README Module 7
+    # design notes on why counts-vs-FPKM barely matters to regulon()'s own
+    # internal normalization — this isn't a unit-correctness requirement).
+    sample_column_regex: "^Count-"
+    symbol_column: geneSymbol
   - sample_id: GSE213784
     dataset: GSE213784
     path: "{multiome_root}/../04_bulk_rnaseq/GSE213784"
   - sample_id: GSE239361
     dataset: GSE239361
     path: "{multiome_root}/../04_bulk_rnaseq/GSE239361"
+    # Confirmed header: gene_id, entrezgene_id, external_gene_name,
+    # description, Sample_*... — entrezgene_id is numeric but not a
+    # sample, so blanket dtype-coercion alone would wrongly keep it.
+    # Deny-listing it lets auto-coercion handle the rest normally.
+    # symbol_column added 2026-09-09: external_gene_name was previously
+    # only being deny-listed (correctly excluded as a non-sample column)
+    # but never redirected to var_names — var_names was defaulting to
+    # gene_id (Ensembl), producing zero overlap with trans_reg.index.
+    exclude_columns: [entrezgene_id]
+    symbol_column: external_gene_name
   - sample_id: GSE240605
     dataset: GSE240605
     path: "{multiome_root}/../04_bulk_rnaseq/GSE240605"
   - sample_id: GSE242321
     dataset: GSE242321
     path: "{multiome_root}/../04_bulk_rnaseq/GSE242321"
+    # Confirmed real data is 2 condition-level files (Atf6-fpkm.txt.gz,
+    # WT-fpkm.txt.gz), not replicates of one condition — needs column-wise
+    # merge. Atf6-fpkm.txt.gz's header confirmed directly (st_gene_id,
+    # gene_id, gene_symbol, fpkm_ATF6KO1..6); WT-fpkm.txt.gz's exact header
+    # was NOT independently confirmed — "^fpkm_" is inferred from the
+    # sibling file's naming convention, not verified. Check this dataset's
+    # branch-audit log on first real run before trusting it.
+    format: multi_file_merge
+    symbol_column: gene_symbol
+    files:
+      - pattern: "GSE242321_RNA-seq_Atf6-fpkm.txt.gz"
+        sample_column_regex: "^fpkm_"
+      - pattern: "GSE242321_RNA-seq_WT-fpkm.txt.gz"
+        sample_column_regex: "^fpkm_"
   - sample_id: GSE242669
     dataset: GSE242669
     path: "{multiome_root}/../04_bulk_rnaseq/GSE242669"
   - sample_id: GSE256069
     dataset: GSE256069
     path: "{multiome_root}/../04_bulk_rnaseq/GSE256069"
+    # Confirmed via header check (openpyxl): .xlsx, real per-sample columns
+    # are the 8 D16h_(CTL|CHIR)<n>_<F|M> columns; everything else is
+    # FC/LFC/p.Value/FDR statistics across several contrasts.
+    format: excel
+    sample_column_regex: "^D16h_(CTL|CHIR)\\d_[FM]$"
+    symbol_column: SYMBOL
   - sample_id: GSE262205
     dataset: GSE262205
     path: "{multiome_root}/../04_bulk_rnaseq/GSE262205"
-  - sample_id: GSE266157
-    dataset: GSE266157
-    path: "{multiome_root}/../04_bulk_rnaseq/GSE266157"
+    # Confirmed via hex dump: genuine binary OLE2 .xls (needs xlrd, not
+    # openpyxl — see envs/linger.yaml). Real column layout NOT YET
+    # inspected (openpyxl can't open it; xlrd wasn't installed at the time
+    # of this investigation) — format: excel is safe to set now (the
+    # loader's read_excel-then-fallback logic will pick the right engine),
+    # but sample_column_regex is NOT SET and this entry WILL currently
+    # fall through to auto dtype-coercion, which the safety-net floor may
+    # or may not accept depending on the real columns. Inspect this
+    # dataset's branch-audit log on first run and add a regex if needed.
+    format: excel
+  # EXCLUDED 2026-09-08 — confirmed real data is 5 kallisto abundance.h5
+  # files, transcript-level (aux/ids, est_counts) with NO gene mapping
+  # bundled in the file or anywhere in the download (confirmed: no .gtf in
+  # the directory or GSE266157_RAW.tar). Rolling up to gene level needs an
+  # external transcript->gene map (e.g. a downloaded Ensembl mouse GTF)
+  # that this pipeline doesn't currently source. Re-add once that mapping
+  # exists and a kallisto reader is built.
+  # - sample_id: GSE266157
+  #   dataset: GSE266157
+  #   path: "{multiome_root}/../04_bulk_rnaseq/GSE266157"
   - sample_id: GSE268504
     dataset: GSE268504
     path: "{multiome_root}/../04_bulk_rnaseq/GSE268504"
+    # Confirmed real RSEM genes.results shape, same columns as GSE149254 —
+    # only difference is the filename pattern (*.genes.results.gz, no
+    # ".txt" before ".gz", so the base loader's default glob patterns
+    # never matched it — this is why it originally fell through to
+    # filelist.txt).
+    format: per_sample_merge
+    glob_pattern: "*.genes.results.gz"
+    value_column: expected_count
+    id_column: gene_id
+    sample_name_regex: "^GSM\\d+_(.+)\\.genes\\.results\\.gz$"
   - sample_id: GSE271610
     dataset: GSE271610
     path: "{multiome_root}/../04_bulk_rnaseq/GSE271610"
+    # Confirmed via hex dump: BOTH .xls.gz files here are actually plain
+    # tab-delimited text wearing a .xls extension (not real binary Excel —
+    # contrast with GSE262205 above). gene_count.xls.gz (not _fpkm) is
+    # picked automatically since "c" < "f" alphabetically and _find_one
+    # only has one xls-pattern tier. Real per-sample columns confirmed:
+    # Ctr1/Ctr2/Ctr4/KO1-4; gene_start/gene_end/gene_length are numeric
+    # but not samples, hence the explicit regex rather than auto-coercion.
+    format: excel
+    sample_column_regex: "^(Ctr|KO)\\d$"
+    symbol_column: gene_name
   - sample_id: GSE275243
     dataset: GSE275243
     path: "{multiome_root}/../04_bulk_rnaseq/GSE275243"
+    # Confirmed real shape: 9 sibling per-sample files, real 2-column
+    # header (gene_id, <sample>_FPKM) — same shape as GSE139145, just 2
+    # columns instead of 7.
+    #
+    # The 3 "P3-HOMO-*" files are DELIBERATELY EXCLUDED from glob_pattern
+    # below, confirmed via real investigation (2026-09-09), not a
+    # heuristic: each has 997,801 rows vs HET/WT's clean 51,913, but
+    # 996,663 of those (~99.9%) are BLANK gene-id rows (tab + nothing,
+    # confirmed via `cat -A` and an empty-id count) — only ~1,137 real
+    # gene entries survive per HOMO file, everything else would silently
+    # read as artifact-zero. Confirmed no cleaner combined-matrix source
+    # exists in this GSE's directory (only filelist.txt/RAW.tar besides
+    # these 9 individual files — RAW.tar is presumably just the same 9
+    # files' origin, not independently checked further). Including HOMO
+    # would inject near-total-gene-silencing artifacts into real
+    # TF-activity scoring for the P3 homozygous-mutant condition; the 6
+    # real HET/WT samples are unaffected and kept. Revisit only if GEO
+    # ever republishes a corrected HOMO export.
+    format: per_sample_merge
+    glob_pattern: "GSM*.txt.gz"
+    exclude_files_regex: "HOMO"
+    id_column: gene_id
+    value_column_index: 1
+    sample_name_regex: "_(P3-(?:HET|HOMO|WT)-\\d)\\.txt\\.gz$"
   - sample_id: GSE294736
     dataset: GSE294736
     path: "{multiome_root}/../04_bulk_rnaseq/GSE294736"
+    # Discovered during Module 7 regression verification. Confirmed real
+    # shape: 6 sibling per-sample files, classic HTSeq-count output (gene
+    # symbol + count, no header line — the ".counts.txt" naming is HTSeq's
+    # own convention). Same headerless handling as GSE198167.
+    format: per_sample_merge
+    glob_pattern: "GSM*.txt.gz"
+    value_column_index: 0
+    header: false
+    sample_name_regex: "_(E18\\.5_Insm1-(?:Het|KO)_OHC\\d)\\.counts\\.txt\\.gz$"
   - sample_id: GSE296324
     dataset: GSE296324
     path: "{multiome_root}/../04_bulk_rnaseq/GSE296324"
+    # Confirmed real data is 2 condition-level files (KO_summary.txt.gz,
+    # wildtype_summary.txt.gz — samples 20648X5-8 and 20648X1-4
+    # respectively), both headers confirmed directly. A third file
+    # (deseq2_results.txt.gz) exists but is a DE-statistics table, not
+    # used here.
+    format: multi_file_merge
+    files:
+      - pattern: "GSE296324_KO_summary.txt.gz"
+        sample_column_regex: "^\\d+X\\d+$"
+      - pattern: "GSE296324_wildtype_summary.txt.gz"
+        sample_column_regex: "^\\d+X\\d+$"
   - sample_id: GSE299064
     dataset: GSE299064
     path: "{multiome_root}/../04_bulk_rnaseq/GSE299064"
@@ -185,15 +386,49 @@ extra_bulk_rna_inputs:
   - sample_id: GSE312476
     dataset: GSE312476
     path: "{multiome_root}/../04_bulk_rnaseq/GSE312476"
+    # Confirmed real per-sample files: gene_symbol, gene_id, <sample> — same
+    # "value column literally named after the sample" shape as GSE139145,
+    # hence value_column_index rather than value_column. id_column uses
+    # gene_id (Ensembl), not gene_symbol, for consistency with the other
+    # per_sample_merge datasets.
+    format: per_sample_merge
+    glob_pattern: "GSM*.txt.gz"
+    value_column_index: 2
+    id_column: gene_id
+    symbol_column: gene_symbol
+    sample_name_regex: "^GSM\\d+_Cochlea_(.+)\\.txt\\.gz$"
   - sample_id: GSE329565
     dataset: GSE329565
     path: "{multiome_root}/../04_bulk_rnaseq/GSE329565"
-  - sample_id: GSE83599
-    dataset: GSE83599
-    path: "{multiome_root}/../04_bulk_rnaseq/GSE83599"
+  # EXCLUDED 2026-09-08 — discovered during Module 7 regression
+  # verification. Confirmed real shape: 6 sibling per-sample files with a
+  # header (ProbeName, "[W<n>](raw)"), but "ProbeName" values (e.g.
+  # A_55_P2280868) are Agilent SurePrint MICROARRAY probe IDs, not gene
+  # identifiers — this is microarray intensity data, not RNA-seq counts.
+  # Fixing the loader wouldn't fix this: TF_activity.regulon() intersects
+  # RNA.index against trans_reg.index (gene symbols/Ensembl IDs) — probe
+  # IDs would produce an EMPTY overlap and either crash or silently return
+  # a meaningless degenerate result, not a loud error. Needs an external
+  # Agilent probe->gene annotation file this pipeline doesn't currently
+  # source (same category of gap as GSE266157's missing transcript->gene
+  # map) before this can be used at all.
+  # - sample_id: GSE83599
+  #   dataset: GSE83599
+  #   path: "{multiome_root}/../04_bulk_rnaseq/GSE83599"
   - sample_id: GSE85519
     dataset: GSE85519
     path: "{multiome_root}/../04_bulk_rnaseq/GSE85519"
+    # Confirmed header: geneid, sym, chr, WTF1-3, HETF1-3. Two fixes:
+    # (1) symbol_column redirects var_names to `sym` instead of `geneid`
+    #     (var_names was previously in whatever identifier `geneid` uses,
+    #     zero overlap with trans_reg.index's gene-symbol space).
+    # (2) exclude_columns: [chr] — separate pre-existing bug, unrelated to
+    #     identifier space: chromosome numbers (1-19) partially parse as
+    #     numeric and were slipping past dtype-coercion's NaN-fraction
+    #     threshold, getting wrongly kept as a fake 7th "sample" alongside
+    #     the real WTF1-3/HETF1-3 columns.
+    symbol_column: sym
+    exclude_columns: [chr]
   - sample_id: GSE90821
     dataset: GSE90821
     path: "{multiome_root}/../04_bulk_rnaseq/GSE90821"
@@ -272,18 +507,34 @@ chromatin_prior_extra:
 # Included by default — tell me if any of these 3 should be excluded.
 # ---------------------------------------------------------------------------
 model_construction_refs:
-  - ref_id: GSE135703_adult_SC
-    dataset: GSE135703
-    path: "{chrom_root}/../03_model_construction/GSE135703_adult_SC"
+  # EXCLUDED 2026-09-09 — discovered during Module 7 regression
+  # verification. Real data (GSE135703_ExpressionMatrix.txt.gz) is
+  # Ensembl-indexed (ENSMUSG00000102693.1), versioned, no symbol column
+  # anywhere in the file or its sibling GSE135703_Metadata.txt.gz
+  # (confirmed per-cell metadata — SeuratName/Stage/Tissue/etc — not
+  # gene-level). TF_activity.regulon() needs RNA.index in gene-symbol
+  # space to overlap trans_reg.index — same category of gap as
+  # GSE266157/GSE116702/etc. Confirmed Module 6 (06_grn_inference.smk)
+  # doesn't source gene space from this loader's output, so this is
+  # contained to Module 7's TF-activity display for this one dataset.
+  # - ref_id: GSE135703_adult_SC
+  #   dataset: GSE135703
+  #   path: "{chrom_root}/../03_model_construction/GSE135703_adult_SC"
   - ref_id: GSE202920_P14_P28
     dataset: GSE202920
     path: "{chrom_root}/../03_model_construction/GSE202920_P14_P28"
   - ref_id: GSE283534_mature_hc
     dataset: GSE283534
     path: "{chrom_root}/../03_model_construction/GSE283534_mature_hc"
-  - ref_id: GSE111349_sorted_ihc_ohc
-    dataset: GSE111349
-    path: "{chrom_root}/../03_model_construction/GSE111349_sorted_ihc_ohc"
+  # EXCLUDED 2026-09-08 — confirmed via download.log this was never
+  # actually downloaded ("wget returned non-zero — partial download or
+  # empty suppl dir", "done — 0 file(s)"). Not a loader bug; the directory
+  # is genuinely empty. Needs manual investigation of GSE111349's real GEO
+  # page to confirm whether a "sorted IHC/OHC" subset exists under a
+  # different filename than this entry assumed, before re-adding.
+  # - ref_id: GSE111349_sorted_ihc_ohc
+  #   dataset: GSE111349
+  #   path: "{chrom_root}/../03_model_construction/GSE111349_sorted_ihc_ohc"
   - ref_id: GSE136196_stria
     dataset: GSE136196
     path: "{chrom_root}/../03_model_construction/GSE136196_stria"
@@ -447,13 +698,11 @@ linger:
   # inside a conda env (avoids collision with a conda-provided homer).
   homer_bin: "/exports/eddie/scratch/s2906787/linger_pipeline/homer/bin"
   use_gpu: false              # flip to true once GPU access on `gpu` queue is confirmed
-  perturbation_genes:
-    - Atoh1
-    - Gfi1
-    - Pou4f3
-    - Tbx2
-  perturbation_combos:
-    - [Atoh1, Gfi1, Pou4f3]   # triple knockout, per HTML Module 8
+  # perturbation_genes/perturbation_combos previously lived here as an
+  # unconsumed placeholder (Module 8 didn't exist yet). REMOVED 2026-09-08
+  # to avoid two competing specs — the real, consumed knockout config is
+  # the top-level `perturbation.knockouts` block near the end of this
+  # file, read directly by 08_perturbation.smk.
 
 # ---------------------------------------------------------------------------
 # Computational resources — single source of truth for SGE memory/slot/
@@ -631,3 +880,84 @@ resources:
                           # two once it does run.
     runtime_min: 480     # was 360 (6h); bumped for the same margin-of-safety
                           # reasoning, unmeasured for this rule specifically
+
+  # ---------------------------------------------------------------------
+  # Modules 7-10 — added 2026-09-08. ALL runtime_min/vmem_mb values below
+  # are FIRST-GUESS PLACEHOLDERS, not tuned against real output, following
+  # this file's own established pattern (see linger_motif_scan/
+  # linger_prep_pseudobulk above) of revising after the first real qacct
+  # failure. Expect to raise linger_tf_activity_one's runtime in particular
+  # once the first batch of 44 datasets shows which are large bulk RNA-seq
+  # vs small sorted-population scRNA-seq.
+  # ---------------------------------------------------------------------
+
+  # --- Module 7 ---
+  linger_tf_activity_one:
+    slots: 1
+    # Bumped 16000 -> 64000 2026-09-08 after GSE182202_P1_RNA's confirmed
+    # real MemoryError (pandas hashtable resize inside
+    # adata.var_names_make_unique(), triggered by a genuinely large
+    # single-cell-resolution mtx — 264MB compressed matrix.mtx.gz). No real
+    # qacct/maxvmem measurement exists for this failure (it OOM'd inside
+    # Python before SGE's own accounting captured a clean peak) — 64000 is
+    # a first-guess 4x bump, unmeasured, following this file's own
+    # established "bump conservatively, revisit after the next real
+    # failure" convention (see linger_motif_scan/linger_prep_pseudobulk
+    # above). Applies to ALL 42 entries under this rule, not just
+    # GSE182202_P1_RNA — this rule has one shared resource block, not a
+    # per-entry_id one (unlike linger_perturbation_ko's per-ko_id params);
+    # revisit if that turns out to matter for cost on the full batch.
+    vmem_mb: 64000
+    runtime_min: 60
+
+  module7_aggregate:
+    slots: 1
+    vmem_mb: 4000
+    runtime_min: 15
+
+  # --- Module 8 ---
+  prep_pseudobulk_target:
+    slots: 1
+    vmem_mb: 16000        # holds Target/Opn/Exp pseudobulk matrices in memory
+    runtime_min: 30
+
+  linger_perturbation_ko:
+    slots: 1
+    vmem_mb: 32000        # torch.load()'s one chromosome's netall dict at a
+                          # time, not the whole genome at once — 32GB is
+                          # headroom, not a measured requirement
+    runtime_min: 240      # unmeasured — per-gene forward passes across all
+                          # chromosomes, no training involved so should be
+                          # much faster than linger_population_training's
+                          # 4h+, but not benchmarked yet
+
+  # --- Module 9 ---
+  validate_one:
+    slots: 1
+    vmem_mb: 16000
+    runtime_min: 60
+
+  module9_aggregate:
+    slots: 1
+    vmem_mb: 4000
+    runtime_min: 15
+
+  # --- Module 10 ---
+  benchmark_grn_edges:
+    slots: 1
+    vmem_mb: 16000
+    runtime_min: 90
+
+# ---------------------------------------------------------------------------
+# perturbation — Module 8. TF knockout sets, matching the HTML plan doc's
+# Module 8 description exactly (reprogramming trio individually + combined,
+# plus Tbx2). No overexpression entries — see 08_perturbation.smk header
+# for why Module 9 doesn't need one.
+# ---------------------------------------------------------------------------
+perturbation:
+  knockouts:
+    atoh1_ko: ["Atoh1"]
+    gfi1_ko: ["Gfi1"]
+    pou4f3_ko: ["Pou4f3"]
+    triple_ko: ["Atoh1", "Gfi1", "Pou4f3"]
+    tbx2_ko: ["Tbx2"]

@@ -27,7 +27,7 @@ flowchart TD
     E --> F["6 · GRN inference<br/>population training + per-cell-type cis/trans networks"]
     F --> G["7 · Bulk TF activity<br/>expression-only regulon scoring, ~44 bulk datasets"]
     F --> J["10 · GRN benchmarking<br/>Hi-C/CUT&RUN as post-hoc ground truth"]
-    G --> H["8 · In silico perturbation<br/>Atoh1/Gfi1/Pou4f3/Tbx2 knockout simulation"]
+    G --> H["8 · In silico perturbation<br/>Atoh1/Gfi1/Pou4f3/Tbx2 knockout, bypass forward-pass"]
     H --> I["9 · Validation<br/>held-out reprogramming data + negative control"]
 
     style A fill:#eef2ff,stroke:#6366f1
@@ -37,13 +37,13 @@ flowchart TD
     style E fill:#d1fae5,stroke:#10b981
     style F fill:#fef9c3,stroke:#eab308
     style G fill:#dbeafe,stroke:#3b82f6
-    style H fill:#fee2e2,stroke:#ef4444
-    style I fill:#f3f4f6,stroke:#9ca3af
+    style H fill:#dbeafe,stroke:#3b82f6
+    style I fill:#dbeafe,stroke:#3b82f6
     style J fill:#dbeafe,stroke:#3b82f6
 ```
 
 **Legend:** green = done on real data · yellow = in progress/debugging ·
-blue = built, not yet run · red = blocked · gray = not built.
+blue = built, not yet run · gray = not built.
 
 Module 5 (chromatin priors) is not a separate pipeline stage — see
 [Design notes](#design-notes).
@@ -56,13 +56,21 @@ Module 5 (chromatin priors) is not a separate pipeline stage — see
 | 3 | `03_integration_celltyping.smk` | Harmony, Leiden, UMAP | Batch integration, clustering, marker scoring, **manual** cell-type labelling | ✅ Done |
 | 4 | `04_linger_init.smk` | LINGER (`scNN`), HOMER | Pseudobulking, TSS redistribution, motif scanning against `MotifTarget.bed` | ✅ Done |
 | 6 | `06_grn_inference.smk` | LingerGRN (`LL_net`, `LINGER_tr`) | Population-level training + per-cell-type cis/trans regulatory networks | 🟡 Debugging |
-| 7 | *(built, not merged)* | LingerGRN (`TF_activity`) | Expression-only TF activity across ~38 bulk + 6 baseline RNA-seq datasets | 🔵 Built |
-| 8 | *(not built)* | LingerGRN (`perturb`) | Atoh1/Gfi1/Pou4f3 (single + triple) and Tbx2 knockout simulation | 🔴 Blocked |
-| 9 | *(not built)* | — | Validation against held-out reprogramming data + negative control | ⚪ Blocked on 8 |
-| 10 | *(built, not merged)* | bedtools, scikit-learn | AUROC/AUPR of inferred edges vs. Hi-C/CUT&RUN ground truth | 🔵 Built |
+| 7 | `07_bulk_tf_activity.smk` | LingerGRN (`TF_activity`) | Expression-only TF activity across ~38 bulk + 6 baseline RNA-seq datasets | 🔵 Built, integrated |
+| 8 | `08_perturbation.smk` | Direct `{chr}_net.pt` forward-pass (bypasses `perturb.py`, see Design notes) | Atoh1/Gfi1/Pou4f3 (single + triple) and Tbx2 knockout simulation | 🔵 Built, integrated |
+| 9 | `09_validation.smk` | scipy, scikit-learn | Correlation + AUROC/AUPR vs. held-out reprogramming data + negative control | 🔵 Built, integrated |
+| 10 | `10_grn_benchmarking.smk` | bedtools, scikit-learn | AUROC/AUPR of inferred edges vs. Hi-C/CUT&RUN ground truth | 🔵 Built, integrated |
 
-See [Development log](#development-log) for what "Debugging"/"Built"/"Blocked"
-mean concretely as of the last session.
+All ten rule files are included in the `Snakefile` and dry-run clean end to
+end (verified with `snakemake -n`). Modules 6-10 are deliberately NOT part
+of `rule all` — same convention as Module 6's existing `module6_all` target,
+since each depends on real upstream output existing, not just its rule
+being defined. Run each stage's own `_all` target once its prerequisite
+is genuinely done — see [Usage](#usage).
+
+See [Development log](#development-log) for what "Debugging"/"Built,
+integrated" mean concretely as of the last session, and for how Module 8's
+former blocker was resolved.
 
 ---
 
@@ -85,13 +93,13 @@ mean concretely as of the last session.
 ├── patch_LL_net_RE_ordering.py       # one-time idempotent patch for a real bug in installed LingerGRN
 ├── patch_LL_net_cis_reg_load.py      # one-time idempotent patch for a second real bug in installed LingerGRN
 └── workflow/
-    ├── rules/                        # 01_qc_preprocessing.smk … 06_grn_inference.smk
+    ├── rules/                        # 01_qc_preprocessing.smk … 10_grn_benchmarking.smk
     └── scripts/                      # per-rule Python helper scripts
 ```
 
-`07_tf_activity.smk` / `10_grn_benchmarking.smk` and their scripts were
-built and verified against the real LingerGRN source but aren't merged
-into `workflow/rules/` in this snapshot — see [Usage](#usage).
+All ten rule files (`01_qc_preprocessing.smk` … `10_grn_benchmarking.smk`)
+are merged into `workflow/rules/` and included from `Snakefile` — see
+[Usage](#usage) for how to run each stage.
 
 ---
 
@@ -264,15 +272,45 @@ If a retry is needed after a fix, delete the relevant `.done` marker first
 (e.g. `population_training.done`) — see
 [Development log](#development-log) for the fixes applied so far.
 
-### 11. Modules 7 and 10 (once Module 6 is clean)
+### 11. Module 7 — bulk TF activity (once Module 6 is clean)
 
-Re-add `07_tf_activity.smk` / `10_grn_benchmarking.smk` to
-`workflow/rules/` and `Snakefile`'s `include:` block, then:
 ```bash
 snakemake --profile profiles/eddie --use-conda --conda-frontend conda \
     --rerun-incomplete --keep-going --latency-wait 60 module7_all
+```
+
+### 12. Module 8 — in silico perturbation
+
+**Run the sanity check first and read its log before trusting anything
+else from this module** — see [Design notes](#design-notes) for why:
+
+```bash
 snakemake --profile profiles/eddie --use-conda --conda-frontend conda \
-    --rerun-incomplete --keep-going --latency-wait 60 <benchmark target>
+    --rerun-incomplete --keep-going --latency-wait 60 \
+    <scratch>/module8_perturbation/_sanity_check_baseline_predicted.tsv
+tail -30 <scratch>/logs/08b_sanity_check.log   # read the SANITY CHECK block
+```
+
+If the median Spearman rho reported there is clearly positive (not near
+zero), proceed:
+
+```bash
+snakemake --profile profiles/eddie --use-conda --conda-frontend conda \
+    --rerun-incomplete --keep-going --latency-wait 60 module8_all
+```
+
+### 13. Module 9 — validation against held-out data
+
+```bash
+snakemake --profile profiles/eddie --use-conda --conda-frontend conda \
+    --rerun-incomplete --keep-going --latency-wait 60 module9_all
+```
+
+### 14. Module 10 — GRN benchmarking (no dependency on 7-9)
+
+```bash
+snakemake --profile profiles/eddie --use-conda --conda-frontend conda \
+    --rerun-incomplete --keep-going --latency-wait 60 benchmark_grn_edges
 ```
 
 ---
@@ -290,8 +328,11 @@ All outputs are written under `{scratch}/`, never into the repository:
 | Labelled, integrated AnnData | `module3_integration/labeled.h5ad` |
 | LINGER motif scan output | `module4_linger_init/MotifTarget.bed` |
 | Per-cell-type GRNs | `module6_grn/{celltype}.done` (cis/trans regulatory matrices) |
-| TF activity scores (planned) | `module7_tf_activity/` |
-| GRN benchmark report (planned) | `module10_benchmark/` (AUROC/AUPR vs. Hi-C/CUT&RUN) |
+| TF activity scores | `module7_tf_activity/tf_activity_summary.tsv` |
+| Perturbation sanity check | `module8_perturbation/_sanity_check_baseline_predicted.tsv` (+ log — READ THIS FIRST) |
+| Knockout predictions | `module8_perturbation/{ko_id}_predicted_expression.tsv` |
+| Validation report | `module9_validation/validation_report.tsv` (correlation + AUROC/AUPR + pass/fail per held-out check) |
+| GRN benchmark report | `module10_benchmarking/benchmark_report.tsv` (AUROC/AUPR vs. Hi-C/CUT&RUN) |
 
 ---
 
@@ -312,7 +353,41 @@ All outputs are written under `{scratch}/`, never into the repository:
 - **Two mouse-incompatible code paths avoided.** LINGER's full
   atlas-pretrained `'LINGER'` method is hardcoded to hg19/hg38 throughout;
   `method='scNN'` is the only mode with native mouse support and is what
-  every rule here uses. This also explains Module 8's blocker (see below).
+  every rule here uses. This is also why Module 8 bypasses `perturb.py`
+  entirely — see the next bullet.
+- **Module 8 reimplements the forward pass directly, rather than using
+  `LingerGRN.perturb`.** `perturb.py`'s `load_data_ptb()`/`get_simulation()`
+  were written for the human/hg19/hg38 `'LINGER'` method's file/index
+  scheme and are confirmed structurally incompatible with `scNN` in three
+  independent ways: a hardcoded human chr1-22+X chromosome list; a
+  `Target`/`data_merge` row-count assumption that `scNN`'s RE-linked gene
+  subset violates; and an explicit-index TF/RE gather scheme that doesn't
+  match `scNN` training's real implicit "all TFs except self" scheme
+  (confirmed against `LINGER_tr.sc_nn_NN()`, the function that actually
+  trained `{chr}_net.pt`). A compatibility shim was considered and
+  rejected — it would mean reimplementing `sc_nn_NN`'s real input contract
+  anyway, then re-encoding it into a format with those three extra bugs.
+  `workflow/scripts/linger_perturbation.py` reimplements the forward pass
+  directly against `{chr}_net.pt`, modeled on `sc_nn_NN` itself. **One
+  real, unresolved risk carries over from this design:** the TF ordering
+  each gene's trained net expects depends on a Python `set()` intersection
+  (`LINGER_tr.load_data_scNN()`'s `TFlist` construction) whose order is
+  process-dependent unless `PYTHONHASHSEED` was fixed at training time —
+  that order was never persisted to disk in `scNN` mode. This can't be
+  retroactively recovered with certainty; `linger_perturbation_sanity_check`
+  (Module 8's first rule) is the only real check available for it — its
+  log reports predicted-vs-real correlation on the *unperturbed* pseudobulk
+  profile, and a result near zero means don't trust knockout output from
+  this module until investigated further. See
+  `workflow/scripts/prep_pseudobulk_target.py` and
+  `workflow/scripts/linger_perturbation.py`'s docstrings for the full
+  detail.
+- **No Module 8 overexpression mode.** Module 9's positive checks compare
+  Module 8's *knockout* predictions directly against real overexpression/
+  conversion ground truth (sign-adjusted where the held-out data represents
+  gain-of-function against a loss-of-function simulation) — per the plan
+  doc's own Module 9 spec — rather than needing a second, separately-built
+  gain-of-function simulation mode.
 - **`os.chdir()` workaround for hardcoded relative paths.** `LINGER_tr.get_TSS()`
   and `RE_TG_dis()` read/write hardcoded `./data/...` paths regardless of
   their `outdir` argument — scripts `chdir()` into a shared per-run workdir
@@ -361,18 +436,56 @@ through an hg19/hg38-only function with no mm10 branch; corrected to
 resolved to route here, not Module 6/4, since `TF_activity.regulon()` is
 the only RNA-only-input function in the package.
 
-**Module 8 (in silico perturbation)** — blocked on a real API gap, not a
-design question: `perturb.load_data_ptb()`'s four required input files are
-only ever written by LINGER's human/hg19/hg38 training path, never the
-mouse-compatible `scNN` path this project uses. Three options under
-consideration: look for an undocumented mouse-mode example, reimplement
-the forward-pass directly against trained `{chr}_net.pt` files, or build a
-compatibility shim. Also blocks Module 9.
+**Module 8 (in silico perturbation) — resolved 2026-09-08, bypass chosen.**
+Was blocked on a real API gap: `perturb.load_data_ptb()`'s four required
+input files are only ever written by LINGER's human/hg19/hg38 training
+path, never the mouse-compatible `scNN` path this project uses. Checked
+LINGER's own GitHub docs before deciding, per the plan's own cheapest-first
+ordering: `docs/perturb.md` (the perturbation tutorial) is entirely
+human/hg19 (H1 cell line, `data_bulk/`); `docs/scNN.md` (the mouse/"other
+species" tutorial) walks through population/cell-type GRN inference and TF
+activity, then stops — no perturbation section exists in the mouse
+tutorial at all. No GitHub issue found addressing mouse-mode perturbation
+either. That ruled out "look for a working example" definitively. Reading
+`perturb.py`'s and `LINGER_tr.py`'s real source in full then ruled out a
+compatibility shim too — it has three of its own bugs (see Design notes)
+beyond the already-known filename mismatch, on top of needing `scNN`'s
+real input contract reimplemented anyway. Built as a direct bypass instead
+(`08_perturbation.smk`, `linger_perturbation.py`,
+`prep_pseudobulk_target.py`), modeled on `LINGER_tr.sc_nn_NN()` — the real
+function that trained `{chr}_net.pt` — not on `perturb.py`. Carries one
+flagged, unresolved risk (TF-ordering nondeterminism) with a built-in
+sanity-check rule to surface it before trusting real knockout output — see
+Design notes for the full explanation. Also found, in the same source
+read: a real cyclic-dependency bug in `06_grn_inference.smk`'s
+`linger_celltype_grn` rule (`{celltype}.done`'s wildcard could ambiguously
+match `population_training.done` itself) — fixed with an explicit
+`wildcard_constraints` block, confirmed via a real `snakemake -n` dry-run
+that surfaced it while integrating Module 7.
+
+**Module 9 (validation) — built 2026-09-08.** Per-check logic in
+`09_validation.smk`'s `CHECK_SPECS`: the two reprogramming checks
+(`atoh1_gfi1_pou4f3_overexpression`, `tbx2_conversion`) compare a named
+Module 8 knockout prediction against each held-out dataset's real
+expression shift relative to Module 4's population pseudobulk baseline
+(sign-flipped for the overexpression check, since it's a gain-of-function
+comparison against a loss-of-function simulation); the four aging checks
+diff Module 7's `role="baseline"` mean TF activity against each aging
+dataset's own TF activity; the negative control reuses the reprogramming
+machinery with inverted pass/fail logic. Output is both Spearman
+correlation and AUROC/AUPR, per the plan doc's explicit Module 9 output
+spec, reusing Module 10's existing AUROC/AUPR approach rather than
+inventing a new metric. Flagged, not silently assumed: exactly which
+samples within each held-out dataset represent "converted" vs baseline
+isn't specified anywhere upstream — this uses each dataset's overall mean
+expression, worth revisiting against real per-condition labels if a
+dataset has them.
 
 **Module 10 (GRN benchmarking)** — built as a bespoke bedtools-intersect +
 AUROC/AUPR script, since `LingerGRN.Benchmk.bm_trans()` expects a ChIP-seq
 ranked-gene-list ground truth, not chromatin-interaction data. No
-dependency on Modules 8/9.
+dependency on Modules 8/9. Integrated into the Snakefile 2026-09-08
+alongside Modules 7-9, unchanged from its original build.
 
 ---
 
