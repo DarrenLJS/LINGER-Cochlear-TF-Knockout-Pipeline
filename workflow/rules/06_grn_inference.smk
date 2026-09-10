@@ -98,6 +98,7 @@ rule linger_population_training:
         # otherwise. See 04_linger_init.smk module docstring for the full story.
         export PATH="{LINGER_ENV_BIN}:$PATH"
         export LD_LIBRARY_PATH="{LINGER_ENV_LIB}:$LD_LIBRARY_PATH"
+        export PYTHONHASHSEED=0
         {LINGER_PYTHON} workflow/scripts/grn_population_training.py \
             --workdir "{params.workdir}" \
             --grn-dir "{params.grn_dir}" \
@@ -149,6 +150,7 @@ rule linger_celltype_grn:
         # module docstring for why this is needed.
         export PATH="{LINGER_ENV_BIN}:$PATH"
         export LD_LIBRARY_PATH="{LINGER_ENV_LIB}:$LD_LIBRARY_PATH"
+        export PYTHONHASHSEED=0
         {LINGER_PYTHON} workflow/scripts/grn_celltype_specific.py \
             --workdir "{params.workdir}" \
             --grn-dir "{params.grn_dir}" \

@@ -862,10 +862,24 @@ resources:
                           # TF_RE_binding() adds another adata_RNA/adata_ATAC
                           # load on top of what training() already held, so
                           # give real headroom rather than a token bump.
-    runtime_min: 600     # was 480 (8h); actual run used 4h09m for training
-                          # alone, TF_RE_binding()'s cost on top is unmeasured
-                          # (crashed before finishing) — 10h keeps ~2x margin
-                          # over the one real data point we have.
+    runtime_min: 1440     # was 600 (10h); RAISED 2026-09-10 after a real
+                          # h_rt kill (job 58205500, qacct: "failed 44:
+                          # execd enforced h_rt limit", ru_wallclock=36000s
+                          # exactly). Real per-chromosome pace observed that
+                          # run: 19/20 chromosomes done in ~596min (~31min/
+                          # chr, no clear speedup/slowdown trend) ->
+                          # extrapolates to ~630min for training() alone
+                          # across all 20 chromosomes — already above the
+                          # old 600min budget before TF_RE_binding()/
+                          # cis_reg()/trans_reg() (all three still totally
+                          # unmeasured, and now confirmed hard-required,
+                          # not optional — see this script's own docstring)
+                          # even start. 1440min (24h) gives ~2.3x margin
+                          # over the ~630min training-only extrapolation,
+                          # leaving real room for the unmeasured tail.
+                          # Revisit with an actual number once a run
+                          # completes end-to-end and qacct shows real
+                          # ru_wallclock for the full job.
 
   linger_celltype_grn:
     slots: 4

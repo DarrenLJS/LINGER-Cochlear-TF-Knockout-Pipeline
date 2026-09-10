@@ -72,6 +72,7 @@ rule prep_pseudobulk_target:
         exec &> {log}
         export PATH="{LINGER_ENV_BIN}:$PATH"
         export LD_LIBRARY_PATH="{LINGER_ENV_LIB}:$LD_LIBRARY_PATH"
+        export PYTHONHASHSEED=0
         {LINGER_PYTHON} workflow/scripts/prep_pseudobulk_target.py \
             --workdir {params.workdir} \
             --grn-dir {params.grn_dir} \
@@ -104,6 +105,7 @@ rule linger_perturbation_sanity_check:
         exec &> {log}
         export PATH="{LINGER_ENV_BIN}:$PATH"
         export LD_LIBRARY_PATH="{LINGER_ENV_LIB}:$LD_LIBRARY_PATH"
+        export PYTHONHASHSEED=0
         {LINGER_PYTHON} workflow/scripts/linger_perturbation.py \
             --workdir {params.workdir} \
             --module8-dir {params.module8_dir} \
@@ -143,6 +145,7 @@ rule linger_perturbation_ko:
         exec &> {log}
         export PATH="{LINGER_ENV_BIN}:$PATH"
         export LD_LIBRARY_PATH="{LINGER_ENV_LIB}:$LD_LIBRARY_PATH"
+        export PYTHONHASHSEED=0
         {LINGER_PYTHON} workflow/scripts/linger_perturbation.py \
             --workdir {params.workdir} \
             --module8-dir {params.module8_dir} \
