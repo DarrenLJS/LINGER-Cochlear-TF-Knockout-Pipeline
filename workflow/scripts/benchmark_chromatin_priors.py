@@ -30,6 +30,7 @@ chromatin-interval ground truth instead of a ranked-gene-list one.
 """
 import argparse
 import glob
+import gzip
 import json
 import os
 import re
@@ -52,14 +53,25 @@ def _parse_re_region(re_string):
     return m.group(1), int(m.group(2)), int(m.group(3))
 
 
+def _is_gzipped(path):
+    """Sniff the gzip magic number (0x1f 0x8b) rather than trusting the
+    file extension — some GEO downloads are gzip without a .gz suffix, and
+    occasionally the reverse (a .gz-named file that's already plain text)."""
+    with open(path, "rb") as f:
+        return f.read(2) == b"\x1f\x8b"
+
+
 def _load_bed_like(path):
     """Best-effort loader for a BED/narrowPeak/bedpe-ish file: assumes the
     first 3 whitespace/tab-delimited columns of any non-header row are
     chrom/start/end. For bedpe (Hi-C loops), ALSO extracts columns 4-6 as a
     second anchor if present, and treats both anchors as valid overlap
-    targets (a cis edge landing in either loop anchor counts as supported)."""
+    targets (a cis edge landing in either loop anchor counts as supported).
+    Transparently handles gzip-compressed input (most GEO narrowPeak/tsv
+    downloads are shipped as .gz)."""
     rows = []
-    with open(path) as f:
+    opener = gzip.open if _is_gzipped(path) else open
+    with opener(path, "rt") as f:
         for line in f:
             if line.startswith(("#", "track", "browser")):
                 continue
@@ -75,15 +87,37 @@ def _load_bed_like(path):
     return rows
 
 
-def _find_ground_truth_file(directory):
-    hit = None
-    for pat in ["*.bedpe*", "*loop*", "*peak*", "*.bed*", "*.narrowPeak*"]:
+def _find_ground_truth_files(directory, role=None, file_glob=None):
+    """Returns a LIST of matched files (not just one), so multiple
+    replicates / multiple named contexts (e.g. two file_glob-selected
+    POU4F3 CUT&RUN conditions) can be unioned by the caller.
+
+    If file_glob is given, it takes priority and is matched literally
+    against files directly under `directory` (not recursively — these
+    directories are flat GEO dumps, and a literal glob keeps selection
+    explicit and auditable from config rather than "whatever sorted-first
+    matched a generic pattern").
+
+    Otherwise falls back to auto-detection, using role-specific patterns:
+    Hi-C loop files are commonly .tsv/.bedpe/loop-named, not "peak"-named,
+    so a single peak-oriented pattern list (the old behaviour) silently
+    missed real Hi-C files that don't happen to have "bed"/"peak" in the
+    name — as it did for GSE305205's *_10kb_01.tsv.gz."""
+    if file_glob:
+        hits = sorted(glob.glob(os.path.join(directory, file_glob)))
+        return [h for h in hits if os.path.isfile(h)]
+
+    if role == "hic_loops":
+        patterns = ["*.bedpe*", "*loop*", "*.tsv*", "*.bed*"]
+    else:  # cutrun and anything else peak-shaped
+        patterns = ["*.narrowPeak*", "*peak*", "*.bed*", "*.bedpe*"]
+
+    for pat in patterns:
         hits = sorted(glob.glob(os.path.join(directory, "**", pat), recursive=True))
         hits = [h for h in hits if os.path.isfile(h)]
         if hits:
-            hit = hits[0]
-            break
-    return hit
+            return hits[:1]  # keep prior single-file-auto-detect behaviour
+    return []
 
 
 def _overlaps_any(chrom, start, end, intervals_by_chrom):
@@ -185,13 +219,20 @@ hic_intervals = []
 cutrun_datasets = []
 for entry in priors:
     role = entry.get("role")
-    directory = entry["path"]
-    gt_file = _find_ground_truth_file(directory)
-    if gt_file is None:
-        print(f"[{entry['prior_id']}] WARNING: no ground-truth file found under {directory}, skipping")
+    if role == "skip":
+        reason = entry.get("skip_reason", "no reason given")
+        print(f"[{entry['prior_id']}] SKIPPED by config (role: skip) — {reason}")
         continue
-    print(f"[{entry['prior_id']}] using {gt_file} (role={role})")
-    intervals = _load_bed_like(gt_file)
+    directory = entry["path"]
+    gt_files = _find_ground_truth_files(directory, role=role, file_glob=entry.get("file_glob"))
+    if not gt_files:
+        print(f"[{entry['prior_id']}] WARNING: no ground-truth file found under {directory}"
+              f"{' matching file_glob=' + entry['file_glob'] if entry.get('file_glob') else ''}, skipping")
+        continue
+    print(f"[{entry['prior_id']}] using {gt_files} (role={role})")
+    intervals = []
+    for gt_file in gt_files:
+        intervals.extend(_load_bed_like(gt_file))
     if role == "hic_loops":
         hic_intervals.extend(intervals)
     elif role == "cutrun":

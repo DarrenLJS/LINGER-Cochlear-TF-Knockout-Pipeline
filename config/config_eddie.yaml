@@ -475,13 +475,40 @@ chromatin_prior_extra:
     dataset: GSE150386
     role: cutrun
     path: "{chrom_root}/GSE150386_cutrun_atoh1"
-  - prior_id: GSE150391_cutrun_pou4f3
+  # GSE150391_cutrun_pou4f3 split 2026-09-11 into two explicit ground-truth
+  # contexts rather than one auto-detected file: the directory is the full
+  # GEO series dump (70 files: ATAC/RNA/CUT&RUN across MEF reprogramming,
+  # P1/E17/Merkel native tissue, multiple KO backgrounds) — picking
+  # "alphabetically first *peak* match" was effectively random with respect
+  # to biology. file_glob pins each to real GSM accessions, both reps
+  # unioned as ground truth. Decided: keep BOTH as separate benchmark rows
+  # (native vs. reprogrammed binding are different claims worth comparing
+  # separately), rather than picking one.
+  - prior_id: GSE150391_pou4f3_wt_hc
     dataset: GSE150391
     role: cutrun
     path: "{chrom_root}/GSE150391_cutrun_pou4f3"
+    file_glob: "GSM454807[45]_E17HC_WT_POU4F3_CutnRun_rep*.narrowPeak.gz"
+    # -> GSM4548074/75_E17HC_WT_POU4F3_CutnRun_rep{1,2}: endogenous POU4F3
+    #    binding in wild-type E17 hair cells (the "native" ground truth).
+  - prior_id: GSE150391_pou4f3_mef_reprogram
+    dataset: GSE150391
+    role: cutrun
+    path: "{chrom_root}/GSE150391_cutrun_pou4f3"
+    file_glob: "GSM454465[12]_MEF_Atoh1_Pou4f3_POU4F3_CutnRun_rep*.narrowPeak.gz"
+    # -> GSM4544651/52_MEF_Atoh1_Pou4f3_POU4F3_CutnRun_rep{1,2}: POU4F3
+    #    binding in MEFs during forced ATOH1+POU4F3 reprogramming — matches
+    #    this pipeline's own atoh1_ko/pou4f3_ko/triple_ko perturbations.
   - prior_id: GSE181307_cutrun
     dataset: GSE181307
-    role: cutrun
+    role: skip
+    skip_reason: >-
+      2026-09-11 — directory contains only 3 bigWig signal tracks
+      (P1_HC_Atoh1_EGFP_rep1/rep2/ctrl.bw), confirmed via `tar -tvf` on the
+      RAW archive — no narrowPeak/BED peak calls were ever deposited in
+      this GEO series. Not a download gap. Would need macs2 bdgpeakcall
+      (or similar) run against the ctrl track as background to produce
+      usable peaks — not attempted yet. Revisit if this prior is needed.
     path: "{chrom_root}/GSE181307_cutrun"
   - prior_id: GSE181310_atac
     dataset: GSE181310
