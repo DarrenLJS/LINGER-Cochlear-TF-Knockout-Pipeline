@@ -53,6 +53,17 @@ auto-detector should guess at:
   - cellranger_h5: CellRanger's own (possibly non-standard-genome-keyed)
     HDF5 export, read via scanpy.read_10x_h5(). Optional: h5_genome_key
     for older exports that don't use a literal genome name Scanpy expects.
+  - cellranger_h5_merge: N sibling per-sample CellRanger .h5 files in one
+    directory, each collapsed to a pseudobulk column and merged into a
+    multi-sample matrix. Required: glob_pattern (specific enough to
+    exclude any manifest/.tar siblings in the same directory). Optional:
+    sample_name_source ("library_id" default, reads each file's own h5
+    attr; "filename" uses the basename instead).
+
+sheet_name (config key, "excel" auto-detected path only): overrides the
+default of reading the workbook's first sheet, for workbooks whose first
+sheet isn't the real data (e.g. a README/notes tab — confirmed real case
+GSE154833, sheet order ['READ ME', 'All values', 'Means', 'Diff Exp']).
 
 sample_column_regex / exclude_columns (config keys, usable with the
 "matrix"/"excel" auto-detected paths and inside multi_file_merge's per-file
@@ -334,12 +345,34 @@ def _load_excel(directory, entry=None):
     entry = entry or {}
     raw = gzip.open(hit, "rb").read() if hit.endswith(".gz") else None
 
+    # sheet_name (config key): workbooks with multiple sheets previously
+    # always parsed sheet_names[0], which silently grabbed a README/notes
+    # tab instead of the real data tab for GSE154833
+    # (['READ ME', 'All values', 'Means', 'Diff Exp'] — sheet 0 was the
+    # README, confirmed via openpyxl inspection). An explicit override
+    # names the real data sheet; if it doesn't exist in the workbook we
+    # raise immediately rather than falling through to the delimited-text
+    # fallback below, which would otherwise try to parse binary xlsx bytes
+    # as text and produce a confusing, unrelated error.
+    override_sheet = entry.get("sheet_name")
+
     try:
         buf = io.BytesIO(raw) if raw is not None else hit
         xl = pd.ExcelFile(buf)
-        df = xl.parse(xl.sheet_names[0], index_col=0)
-        _log(f"[{os.path.basename(hit)}] read as real Excel, sheet={xl.sheet_names[0]!r}")
+        if override_sheet is not None and override_sheet not in xl.sheet_names:
+            raise ValueError(
+                f"[{os.path.basename(hit)}] sheet_name override {override_sheet!r} "
+                f"not found — sheets present: {xl.sheet_names}"
+            )
+        sheet_name = override_sheet or xl.sheet_names[0]
+        df = xl.parse(sheet_name, index_col=0)
+        _log(
+            f"[{os.path.basename(hit)}] read as real Excel, sheet={sheet_name!r}"
+            + (" (explicit override)" if override_sheet else " (default: first sheet)")
+        )
     except Exception as e:
+        if override_sheet is not None:
+            raise
         _log(f"[{os.path.basename(hit)}] read_excel failed ({e!r}); falling back to delimited-text read")
         buf = io.BytesIO(raw) if raw is not None else hit
         df = pd.read_csv(buf, sep="\t", index_col=0)
@@ -577,6 +610,82 @@ def _load_cellranger_h5(directory, entry):
     return adata
 
 
+# --------------------------------------------------------------------------
+# format: cellranger_h5_merge — N sibling per-sample CellRanger .h5 files,
+# each collapsed to one pseudobulk column (same collapse logic as
+# _load_cellranger_h5's role="bulk" path), merged column-wise into one
+# multi-sample matrix. Confirmed real shape: GSE281207_Tmie_control (6
+# GSM-per-sample .h5 files — P21-HET-A/B/C/F, P21-KO-B/E/F (4 HET + 3 KO,
+# confirmed via actual load: n_files=7) — CellRanger
+# 7.0.0, Single Cell 3' v3, single genome embedded directly in
+# matrix/features/genome, confirmed via h5py inspection, so no
+# h5_genome_key needed here unlike GSE120462's older v2-style export).
+#
+# This directory also contains filelist.txt (a GEO-generated manifest:
+# Name/Time/Type/Size columns) and a raw .tar of the same h5 files —
+# glob_pattern must be specific enough to exclude both, since
+# _load_single_matrix_file's own glob list (tried earlier in
+# load_rna_only's auto-detect chain for fmt=None) was previously matching
+# filelist.txt via its bare "*.txt" pattern before ever reaching this
+# branch. Auto-detection was NOT extended to include this branch — a
+# directory holding N sibling single-cell .h5 files, mixed with the raw
+# .tar/manifest, has no safe generic signature to auto-detect against, so
+# `format: cellranger_h5_merge` must be set explicitly per entry.
+# --------------------------------------------------------------------------
+def _load_cellranger_h5_merge(directory, entry):
+    import h5py
+    import scanpy as sc
+
+    pattern = entry.get("glob_pattern", "*.h5")
+    hits = sorted(glob.glob(os.path.join(directory, pattern)))
+    if not hits:
+        return None
+
+    # sample_name_source: "library_id" (default) reads each file's own
+    # library_ids h5 attr — more robust than filename parsing since it's
+    # baked into the CellRanger export itself (confirmed present:
+    # library_ids=[b'P21-HET-A'] etc. for every GSE281207 file). Falls back
+    # to "filename" for h5 files that don't carry a usable attr.
+    name_source = entry.get("sample_name_source", "library_id")
+
+    pseudobulk_cols = {}
+    var_names_ref = None
+    for hit in hits:
+        adata = sc.read_10x_h5(hit)
+        adata.var_names_make_unique()
+        if var_names_ref is None:
+            var_names_ref = list(adata.var_names)
+        elif list(adata.var_names) != var_names_ref:
+            raise ValueError(
+                f"cellranger_h5_merge: {os.path.basename(hit)}'s gene set/order "
+                f"differs from the first file's ({os.path.basename(hits[0])}) — "
+                f"sibling h5 files must share identical features to merge as "
+                f"pseudobulk columns of one matrix."
+            )
+        if name_source == "library_id":
+            with h5py.File(hit, "r") as f:
+                lib_ids = f.attrs.get("library_ids")
+            sample_name = (
+                lib_ids[0].decode() if lib_ids is not None and len(lib_ids)
+                else os.path.splitext(os.path.basename(hit))[0]
+            )
+        else:
+            sample_name = os.path.splitext(os.path.basename(hit))[0]
+        summed = np.asarray(adata.X.sum(axis=0)).ravel()
+        pseudobulk_cols[sample_name] = summed
+        _log(
+            f"cellranger_h5_merge: {os.path.basename(hit)} -> "
+            f"sample={sample_name!r} ({adata.shape[0]} barcodes collapsed)"
+        )
+
+    mat = pd.DataFrame(pseudobulk_cols, index=var_names_ref)
+    adata_out = ad.AnnData(X=sp.csr_matrix(mat.values.T))
+    adata_out.obs_names = list(mat.columns)
+    adata_out.var_names = [str(g) for g in mat.index]
+    _log(f"branch=cellranger_h5_merge n_files={len(hits)} shape={adata_out.shape}")
+    return adata_out
+
+
 def load_rna_only(entry):
     """
     entry: one dict from extra_bulk_rna_inputs or model_construction_refs
@@ -596,6 +705,8 @@ def load_rna_only(entry):
         adata = _load_multi_file_merge(directory, entry)
     elif fmt == "cellranger_h5":
         adata = _load_cellranger_h5(directory, entry)
+    elif fmt == "cellranger_h5_merge":
+        adata = _load_cellranger_h5_merge(directory, entry)
     elif fmt == "excel":
         adata = _load_excel(directory, entry)
     else:

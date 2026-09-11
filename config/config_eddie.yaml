@@ -620,6 +620,14 @@ held_out_inputs:
     dataset: GSE224627
     path: "{multiome_root}/../06_held_out/GSE224627_GAP_reprogramming"
     check: atoh1_gfi1_pou4f3_overexpression
+    # GSE224627_Exon_UMI_matrix.txt.gz carries a real gene_symbol column
+    # separate from its row index — confirmed via loader log (dtype-coercion
+    # dropped=['gene_symbol'], correctly, since it's non-numeric). Without
+    # this override var_names fell back to the raw index (a different
+    # identifier space than TG_pseudobulk.tsv's gene-symbol index), giving
+    # an empty gene intersection (real_shift: 0 genes) and a hard FAIL with
+    # no computed statistics at all.
+    symbol_column: gene_symbol
   - sample_id: GSE233559_Tbx2_OHC_IHC
     dataset: GSE233559
     path: "{multiome_root}/../06_held_out/GSE233559_Tbx2_OHC_IHC"
@@ -636,6 +644,20 @@ held_out_inputs:
     dataset: GSE154833
     path: "{multiome_root}/../06_held_out/GSE154833_stria_aging"
     check: aging_vector_support
+    # Workbook sheet order is [READ ME, All values, Means, Diff Exp] —
+    # confirmed via openpyxl. Default (sheet 0) was reading the README tab.
+    # "All values" is the real per-sample matrix; "Means" is already
+    # condition-aggregated (too few columns) and "Diff Exp" is a
+    # statistics table, not a sample matrix.
+    format: excel
+    sheet_name: "All values"
+    # "All values" itself mixes 9 real per-replicate columns
+    # (<N>mo_SV_<letter>) with 3 pre-aggregated "<N>mo_SV means" columns
+    # and an "ANOVA ... FDR p-value correction" stats column — all numeric,
+    # so dtype-coercion alone can't tell them apart. Confirmed via a
+    # standalone load: without this, dtype-coercion keeps all 13 as if
+    # they were independent samples. Restrict to the real replicates only.
+    sample_column_regex: "^\\d+mo_SV_[A-Z]$"
   - sample_id: GSE196870_SNHL
     dataset: GSE196870
     path: "{multiome_root}/../06_held_out/GSE196870_SNHL"
@@ -655,6 +677,14 @@ negative_control_input:
   dataset: GSE281207
   path: "{multiome_root}/../07_negative_control/GSE281207_Tmie_control"
   check: negative_control_must_not_reprogram
+  # Directory holds 6 sibling per-sample CellRanger .h5 files (P21-HET-A/B/C/F,
+  # P21-KO-B/E/F; CellRanger 7.0.0, Single Cell 3' v3 — confirmed via h5py),
+  # plus filelist.txt (a GEO manifest) and GSE281207_RAW.tar. Auto-detect
+  # previously matched filelist.txt via _load_single_matrix_file's bare
+  # "*.txt" glob before ever considering the real .h5 files. glob_pattern
+  # below is specific enough to exclude both filelist.txt and the .tar.
+  format: cellranger_h5_merge
+  glob_pattern: "GSM*_P21-*.h5"
 
 # ---------------------------------------------------------------------------
 # QC thresholds — starting points, inspect QC plots before trusting on a full run.

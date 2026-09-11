@@ -53,9 +53,23 @@ rule benchmark_grn_edges:
         set -euo pipefail
         exec &> {log}
         export PATH="{LINGER_ENV_BIN}:$PATH"
+        # FIX 2026-09-11 — real bug, confirmed via disk inspection + per-log
+        # trace: celltype names here contain spaces and hyphens (e.g.
+        # "Non-sensory epithelium - unresolved Gata3+"). Without :q,
+        # Snakemake stringifies params.celltypes by joining elements with
+        # spaces and NO per-element quoting, so the shell then word-splits
+        # each multi-word celltype name into several separate --celltypes
+        # tokens (argparse nargs="+" happily swallows all of them). This
+        # is exactly why benchmark_chromatin_priors.py's own log showed
+        # nonsense fragment "celltypes" like "-", "unresolved", "Gata3+"
+        # instead of the real names, and why every file lookup inside it
+        # missed (real per-celltype files DO exist on disk under the
+        # correct cell_type_specific_TF_RE_binding_{{celltype}}.txt name —
+        # confirmed via `find`). :q shell-quotes each element individually,
+        # so a name containing spaces survives as one argument.
         {LINGER_PYTHON} workflow/scripts/benchmark_chromatin_priors.py \
             --module4-dir {params.module4_dir} \
-            --celltypes {params.celltypes} \
+            --celltypes {params.celltypes:q} \
             --chrom-priors-json {params.chrom_priors_json:q} \
             --outdir {params.outdir} \
             --output-report {output.report}
