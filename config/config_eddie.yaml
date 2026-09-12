@@ -1017,7 +1017,16 @@ resources:
   benchmark_grn_edges:
     slots: 1
     vmem_mb: 16000
-    runtime_min: 90
+    # runtime_min bumped 90 -> 360 on 2026-09-13: job was being killed by
+    # the SGE wall-clock limit, not crashing in Python — confirmed via an
+    # empty 10_benchmark.log and a .error file with no traceback, just the
+    # Snakemake startup banner, plus a ~92min gap between job submission
+    # and the reported failure (matching the old 90min runtime almost
+    # exactly). The added GSE150391 split-prior (2 separate contexts) and
+    # multi-file union-of-intervals logic from the 2026-09-11 fix round
+    # added real per-celltype work across all 9 priors x 16 celltypes,
+    # pushing actual runtime past the old ceiling.
+    runtime_min: 360
 
 # ---------------------------------------------------------------------------
 # perturbation — Module 8. TF knockout sets, matching the HTML plan doc's
