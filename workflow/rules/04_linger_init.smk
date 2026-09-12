@@ -191,11 +191,30 @@ rule linger_motif_scan:
         exec &> "{log}"
         export PATH="{params.homer_bin}:$PATH"
 
-        # Step 1: extract FASTA sequences for every consensus peak. HOMER
-        # auto-names unnamed peaks (our consensus_peaks.bed has no name
-        # column) as default-1, default-2, ... — confirmed on manual test,
-        # these become the PositionID values homer2 find reports.
-        homerTools extract "{input.consensus_bed}" "{params.homer_genome_dir}" -fa \
+        # Step 0: consensus_peaks.bed has no 4th (name) column — bedtools
+        # merge doesn't add one by default (see 02_consensus_peaks.smk's
+        # merge_consensus_peaks rule). Without a name column, homerTools
+        # extract auto-assigns opaque default-1, default-2, ... names,
+        # which become PositionID below — and those can NEVER match the
+        # chr:start-end RE identifiers used everywhere else in this
+        # pipeline (cell_population_TF_RE_binding.txt, cis_regulatory
+        # output, etc.), so LL_net.load_TFbinding_scNN()'s RE-overlap join
+        # against MotifTarget.bed (Module 6) is always empty, producing a
+        # structurally 100%-NaN cell_type_specific_TF_RE_binding output
+        # for every TF and every celltype — confirmed via direct
+        # inspection on 2026-09-11 (PositionID values were literally
+        # 'default-224626' etc., not coordinates). Generate a locally-
+        # named 4-column BED here rather than touching consensus_peaks.bed
+        # itself, since that file already has several other consumers
+        # across Modules 2/4/6/10 that ran successfully against its
+        # original 3-column schema.
+        awk 'BEGIN{{OFS="\t"}} {{print $1, $2, $3, $1":"$2"-"$3}}' "{input.consensus_bed}" \
+            > "{params.workdir}/consensus_peaks_named.bed"
+
+        # Step 1: extract FASTA sequences for every consensus peak, from
+        # the named BED above so PositionID below is a real chr:start-end
+        # coordinate string, not an opaque default-N placeholder.
+        homerTools extract "{params.workdir}/consensus_peaks_named.bed" "{params.homer_genome_dir}" -fa \
             > "{params.workdir}/motif_scan_sequences.fa"
 
         # Step 2: real motif-instance scan. -p uses this rule's granted
