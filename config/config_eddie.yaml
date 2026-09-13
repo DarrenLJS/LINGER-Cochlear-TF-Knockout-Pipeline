@@ -662,6 +662,18 @@ held_out_inputs:
     dataset: GSE196870
     path: "{multiome_root}/../06_held_out/GSE196870_SNHL"
     check: aging_vector_support
+    # 2026-09-13 — GSE196870_Raw_gene_FPKM_matrix.txt.csv.gz's column 0 is
+    # an Ensembl gene ID (ENSMUSG...), not a symbol. Real gene symbols
+    # live in a separate 'gene' column, which _coerce_numeric_columns()
+    # correctly drops as non-numeric "sample" data but which was never
+    # promoted to var_names — so every TF's activity came back NaN (zero
+    # overlap with the GRN's symbol-space regulon targets), confirmed via
+    # `_auroc_aupr`/spearman dropping all 586/586 TFs as NaN, and via the
+    # raw file itself (col0=ENSMUSG..., col1=symbol e.g. Zswim4/Zw10/Zyx).
+    # symbol_column routes _resolve_var_names() to use the real symbols
+    # instead of the Ensembl index (same mechanism already used elsewhere
+    # in this file for GSE203228/GSE85519's id-vs-symbol column split).
+    symbol_column: gene
   - sample_id: GSE273939_TNF_organoids
     dataset: GSE273939
     path: "{multiome_root}/../06_held_out/GSE273939_TNF_organoids"

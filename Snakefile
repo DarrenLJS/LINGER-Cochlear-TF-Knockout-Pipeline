@@ -1,8 +1,10 @@
 # =============================================================================
 # LINGER Cochlear GRN Pipeline
 # Port of modules 1-2 (QC, consensus peaks) from the original standalone
-# scripts, plus new Module 3 (integration & cell typing). Architecture
-# mirrors the tRNA-seq Three-pass Alignment Snakemake Pipeline.
+# scripts, plus Module 3 (integration & cell typing) and Modules 4/6-10
+# (LINGER init, GRN inference, bulk TF activity, perturbation, validation,
+# benchmarking — Module 5 folded into 10, see README "Design notes").
+# Architecture mirrors the tRNA-seq Three-pass Alignment Snakemake Pipeline.
 # =============================================================================
 #
 # Pipeline stages
@@ -10,17 +12,23 @@
 #   01  QC & preprocessing        (per-sample RNA+ATAC load, filter, Scrublet)
 #   02  Consensus peak set        (per-sample peaks -> bedtools merge -> re-quantify -> sync)
 #   03  Integration & cell typing (Harmony batch correction, Leiden, UMAP, marker scoring)
-#   -- modules 4-10 (LINGER init, chromatin priors, GRN inference, bulk TF
-#      activity, perturbation, validation, benchmarking) not yet built --
+#   04  LINGER init               (pseudobulk, TSS redistribution, HOMER motif scan)
+#   06  GRN inference             (population + per-cell-type cis/trans networks)
+#   07  Bulk TF activity          (expression-only regulon scoring, ~44 datasets)
+#   08  In silico perturbation    (direct {chr}_net.pt forward-pass, bypasses perturb.py)
+#   09  Validation                (vs. held-out reprogramming/aging data + negative control)
+#   10  GRN benchmarking          (Hi-C/CUT&RUN as post-hoc ground truth; Module 5's role)
+#   -- updated 2026-09-13: all nine rule files above are built AND have been
+#      run end-to-end on real Eddie data at least once; see README's
+#      Development log for the bugs found and fixed along the way --
 #
 # Conda environments
 # ------------------
 #   envs/linger_preproc.yaml — scanpy, anndata, scrublet, snapatac2, harmonypy,
 #                               bedtools. Covers modules 1-3 entirely.
-#   (envs/linger.yaml will be added in the module 4+ build for LingerGRN itself,
-#    isolated the same way envs/mimseq.yaml isolates mim-tRNAseq in the
-#    reference pipeline — LINGER's own dependency set is expected to conflict
-#    with the scanpy/snapatac2 stack.)
+#   Module 4/6/7/8 rules point `conda:` directly at a pre-built `LINGER` env
+#   by absolute path (see README "Design notes") rather than building from
+#   envs/linger.yaml, which is kept for documentation only.
 #
 # Usage
 # -----

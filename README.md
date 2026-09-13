@@ -14,6 +14,13 @@ against held-out reprogramming data, and GRN benchmarking against
 independent Hi-C/CUT&RUN ground truth. Everything runs on the University
 of Edinburgh's Eddie (SGE) HPC cluster via Snakemake's SGE executor.
 
+**Status as of 2026-09-13: all ten stages have run on real Eddie data at
+least once.** Modules 9 and 10 surfaced two genuine result-correctness bugs
+this session (not just infrastructure failures) — see
+[Development log](#development-log) — and Module 9's validation numbers
+are real but currently weak on three of the four checks, which is a
+scientific finding worth sitting with, not an unfinished-pipeline problem.
+
 ---
 
 ## Pipeline overview
@@ -25,25 +32,27 @@ flowchart TD
     C --> D["3 · Integration & cell typing<br/>Harmony, Leiden, UMAP, manual annotation"]
     D --> E["4 · LINGER init (mouse/scNN)<br/>pseudobulk, TSS redistribution, HOMER motif scan"]
     E --> F["6 · GRN inference<br/>population training + per-cell-type cis/trans networks"]
-    F --> G["7 · Bulk TF activity<br/>expression-only regulon scoring, ~44 bulk datasets"]
+    F --> G["7 · Bulk TF activity<br/>expression-only regulon scoring, 41 bulk/baseline datasets"]
     F --> J["10 · GRN benchmarking<br/>Hi-C/CUT&RUN as post-hoc ground truth"]
     G --> H["8 · In silico perturbation<br/>Atoh1/Gfi1/Pou4f3/Tbx2 knockout, bypass forward-pass"]
     H --> I["9 · Validation<br/>held-out reprogramming data + negative control"]
 
-    style A fill:#eef2ff,stroke:#6366f1
+    style A fill:#d1fae5,stroke:#10b981
     style B fill:#d1fae5,stroke:#10b981
     style C fill:#d1fae5,stroke:#10b981
     style D fill:#d1fae5,stroke:#10b981
     style E fill:#d1fae5,stroke:#10b981
-    style F fill:#fef9c3,stroke:#eab308
-    style G fill:#dbeafe,stroke:#3b82f6
-    style H fill:#dbeafe,stroke:#3b82f6
-    style I fill:#dbeafe,stroke:#3b82f6
-    style J fill:#dbeafe,stroke:#3b82f6
+    style F fill:#d1fae5,stroke:#10b981
+    style G fill:#d1fae5,stroke:#10b981
+    style H fill:#d1fae5,stroke:#10b981
+    style I fill:#d1fae5,stroke:#10b981
+    style J fill:#d1fae5,stroke:#10b981
 ```
 
-**Legend:** green = done on real data · yellow = in progress/debugging ·
-blue = built, not yet run · gray = not built.
+**Legend:** green = run end-to-end on real data at least once. See the
+status table below for per-module caveats — "run" doesn't mean every
+result is strong (Module 9 in particular has real, weak validation
+numbers on three of four checks).
 
 Module 5 (chromatin priors) is not a separate pipeline stage — see
 [Design notes](#design-notes).
@@ -53,24 +62,24 @@ Module 5 (chromatin priors) is not a separate pipeline stage — see
 | 0 | *(manual)* | conda, HOMER, `setup_linger.sh` | Conda envs, mm10 references, LINGER pretrained weights, HOMER + mm10 genome package | ✅ Done |
 | 1 | `01_qc_preprocessing.smk` | Scanpy, Scrublet | Per-sample RNA+ATAC load, QC filtering, doublet detection | ✅ Done |
 | 2 | `02_consensus_peaks.smk` | bedtools, SnapATAC2 | Consensus peak set, re-quantification, RNA/ATAC barcode sync, sanity checks | ✅ Done |
-| 3 | `03_integration_celltyping.smk` | Harmony, Leiden, UMAP | Batch integration, clustering, marker scoring, **manual** cell-type labelling | ✅ Done |
+| 3 | `03_integration_celltyping.smk` | Harmony, Leiden, UMAP | Batch integration, clustering, marker scoring, **manual** cell-type labelling — 16 annotated cell types | ✅ Done |
 | 4 | `04_linger_init.smk` | LINGER (`scNN`), HOMER | Pseudobulking, TSS redistribution, motif scanning against `MotifTarget.bed` | ✅ Done |
-| 6 | `06_grn_inference.smk` | LingerGRN (`LL_net`, `LINGER_tr`) | Population-level training + per-cell-type cis/trans regulatory networks | 🟡 Debugging |
-| 7 | `07_bulk_tf_activity.smk` | LingerGRN (`TF_activity`) | Expression-only TF activity across ~38 bulk + 6 baseline RNA-seq datasets | 🔵 Built, integrated |
-| 8 | `08_perturbation.smk` | Direct `{chr}_net.pt` forward-pass (bypasses `perturb.py`, see Design notes) | Atoh1/Gfi1/Pou4f3 (single + triple) and Tbx2 knockout simulation | 🔵 Built, integrated |
-| 9 | `09_validation.smk` | scipy, scikit-learn | Correlation + AUROC/AUPR vs. held-out reprogramming data + negative control | 🔵 Built, integrated |
-| 10 | `10_grn_benchmarking.smk` | bedtools, scikit-learn | AUROC/AUPR of inferred edges vs. Hi-C/CUT&RUN ground truth | 🔵 Built, integrated |
+| 6 | `06_grn_inference.smk` | LingerGRN (`LL_net`, `LINGER_tr`) | Population-level training + per-cell-type cis/trans regulatory networks, 16 cell types | ✅ Done — `module6_all` completed clean after 3 real bugs fixed |
+| 7 | `07_bulk_tf_activity.smk` | LingerGRN (`TF_activity`) | Expression-only TF activity, 41 datasets (37 bulk + 4 baseline) | ✅ Done — `tf_activity_summary.tsv` produced, 586 TFs |
+| 8 | `08_perturbation.smk` | Direct `{chr}_net.pt` forward-pass (bypasses `perturb.py`, see Design notes) | Atoh1/Gfi1/Pou4f3 (single + triple) and Tbx2 knockout simulation | ✅ Done — sanity check median ρ = 0.797, `module8_all` run |
+| 9 | `09_validation.smk` | scipy, scikit-learn | Correlation + AUROC/AUPR vs. held-out reprogramming/aging data + negative control | ✅ Done — real numbers now (2 result-correctness bugs fixed this session); results are weak on 3/4 checks, see below |
+| 10 | `10_grn_benchmarking.smk` | bedtools, scikit-learn | AUROC/AUPR of inferred edges vs. Hi-C/CUT&RUN ground truth | ✅ Done — `benchmark_report.tsv` produced across 16 cell types |
 
-All ten rule files are included in the `Snakefile` and dry-run clean end to
-end (verified with `snakemake -n`). Modules 6-10 are deliberately NOT part
-of `rule all` — same convention as Module 6's existing `module6_all` target,
-since each depends on real upstream output existing, not just its rule
-being defined. Run each stage's own `_all` target once its prerequisite
-is genuinely done — see [Usage](#usage).
+All ten rule files are included in the `Snakefile` and have each been run
+end-to-end on real Eddie data at least once. Modules 6-10 are deliberately
+NOT part of `rule all` — same convention as Module 6's existing
+`module6_all` target, since each depends on real upstream output existing,
+not just its rule being defined. Run each stage's own `_all` target — see
+[Usage](#usage).
 
-See [Development log](#development-log) for what "Debugging"/"Built,
-integrated" mean concretely as of the last session, and for how Module 8's
-former blocker was resolved.
+See [Development log](#development-log) for the bugs found and fixed
+getting each module from "built" to "run clean," and
+[Key outputs](#key-outputs) for where the real result files land.
 
 ---
 
@@ -115,7 +124,19 @@ and reused by direct path, not rebuilt per run:
 |---|---|---|
 | `snakemake_eddie` (orchestrator, self-created) | Python ≥3.11, `snakemake`, `snakemake-executor-plugin-sge`, `conda≥24.7.1` | Runs the `snakemake` CLI itself. Modern Snakemake requires Python ≥3.11, which conflicts with `linger_preproc`'s pinned 3.10 — must be a separate env, never used to run analysis code |
 | `linger_preproc` (`envs/linger_preproc.yaml`, built by Snakemake) | scanpy≥1.10, anndata≥0.10, snapatac2==2.9.0, harmonypy≥0.0.10,<0.1.0, leidenalg, scrublet, bedtools | Modules 1–3's single-cell + ATAC stack |
-| `LINGER` (pre-built by `setup_linger.sh`, reused by absolute path) | scanpy==1.9.5, anndata==0.9.2, scipy==1.11.3, `LingerGRN==1.105 --no-deps`, rpy2, pytorch | Modules 4/6/7/8. Exact pins arrived at by trial and error to avoid an anndata/scipy conflict — kept isolated and never rebuilt from `envs/linger.yaml` (kept as documentation only) |
+| `LINGER` (pre-built by `setup_linger.sh`, reused by absolute path) | scanpy==1.9.5, anndata==0.9.2, scipy==1.11.3, `LingerGRN` (see version note below), rpy2, pytorch | Modules 4/6/7/8. Exact pins arrived at by trial and error to avoid an anndata/scipy conflict — kept isolated and never rebuilt from `envs/linger.yaml` (kept as documentation only) |
+
+> **Unresolved version-pin discrepancy, flagged rather than silently
+> picked:** `setup_linger.sh` and `envs/linger.yaml` both install and pin
+> `LingerGRN==1.105`. But `grn_population_training.py` and
+> `grn_celltype_specific.py`'s own docstrings, plus the working plan doc,
+> both say "real LingerGRN==1.110 calls, confirmed from source" (pulled
+> directly from PyPI during Module 6/7 debugging). One of these is stale —
+> either the real Eddie `LINGER` env ended up with 1.110 (e.g. `--no-deps`
+> resolved differently at install time than the pin implies) and
+> `setup_linger.sh` needs its pin bumped to match, or the docstrings are
+> wrong and should cite 1.105. Confirm with `pip show LingerGRN` in the
+> real env before trusting either document over the other.
 
 ### Manual post-install steps
 
@@ -336,6 +357,48 @@ All outputs are written under `{scratch}/`, never into the repository:
 
 ---
 
+## Results snapshot (2026-09-13 run)
+
+Real numbers from the current output files, kept here so the README
+doesn't just say "done" without showing what that means:
+
+- **Module 3** — 16 annotated cell types across 29 Leiden clusters, ~13k
+  cells; three GSE224563/GSE182202 batches integrate cleanly with no
+  strong batch-driven substructure in the UMAP.
+- **Module 8 sanity check** — median Spearman ρ = **0.797** (mean 0.668,
+  80% of 23,082 genes above ρ>0.3) between the reconstructed-order forward
+  pass and real pseudobulk expression — clearly positive, so the
+  `PYTHONHASHSEED`-dependent TF-ordering risk flagged in
+  [Design notes](#design-notes) did not materialise for this run. Real
+  knockout output is trusted on this basis.
+- **Module 9 validation** — of four checks with a real ground truth:
+  - `atoh1_gfi1_pou4f3_overexpression` (GSE224627): **PASS** (ρ=0.44, AUROC=0.77)
+  - `tbx2_conversion` (GSE233559): **FAIL** (ρ=−0.60, AUROC=0.75 — note the
+    sign: AUROC alone looks fine, but the correlation runs the wrong
+    direction once sign-adjusted for the gain-of-function comparison)
+  - `negative_control_must_not_reprogram` (GSE281207): **FAIL** — the
+    control shows about as strong a signal (ρ=0.72) as the real positive
+    checks, meaning the model isn't cleanly discriminating "should
+    reprogram" from "shouldn't"
+  - `aging_vector_support` (3 usable datasets vs. the GSE274279 reference
+    vector): all three near zero/non-significant (ρ = −0.02, −0.07, 0.15)
+    — the aging-shift prediction doesn't externally validate by this
+    metric yet.
+
+  **Read this as a real, partially negative result, not a broken
+  pipeline** — the numbers only became trustworthy this session once two
+  genuine bugs were fixed (see [Development log](#development-log)); the
+  pipeline was previously hiding this outcome behind a hardcoded `1.0`.
+- **Module 10 benchmarking** — `cis_RE_TG` vs. Hi-C loops sits at
+  AUROC 0.51–0.52 across all 16 cell types (same edge universe per
+  cell type, only the score column varies — expected, not a bug, but a
+  genuinely weak signal). `TF_RE_binding` vs. CUT&RUN varies meaningfully
+  by cell type and TF: Atoh1 AUROC 0.58–0.78, Pou4f3 AUROC 0.53–0.66
+  (both wild-type and MEF-reprogramming ground truth) — a real,
+  celltype-sensitive signal, unlike the cis edges.
+
+---
+
 ## Design notes
 
 - **Three-environment split.** The orchestrator (`snakemake_eddie`), the
@@ -426,15 +489,26 @@ data**, none visible from reading LINGER's source alone:
 - Memory grants bumped (32GB → 48GB) after a real run hit 96% of the old
   grant; a training-resume guard was added so a late-stage failure doesn't
   force a ~4h retrain.
-- Latest retry (`module6_all`, `retry10`) was in flight as of the last
-  session — confirm its outcome before treating Module 6 as done.
+- `module6_all` (`retry10`) **completed clean** — all 16 `linger_celltype_grn`
+  array tasks plus population training finished with no error, confirmed
+  via `.done` marker count and the population-level `cell_population_{cis,
+  trans}_regulatory.txt` outputs Module 7 depends on.
 
-**Module 7 (bulk TF activity)** — built against the real installed
-`LingerGRN` source. Caught a bug before running: `network="general"` routes
-through an hg19/hg38-only function with no mm10 branch; corrected to
-`network="cell population"`. `model_construction_refs` (6 GEO accessions)
+**Module 7 (bulk TF activity) — completed, after a real multi-session
+loader debugging effort.** Built against the real installed `LingerGRN`
+source; caught one bug before running (`network="general"` routes through
+an hg19/hg38-only function with no mm10 branch, corrected to
+`network="cell population"`). `model_construction_refs` (6 GEO accessions)
 resolved to route here, not Module 6/4, since `TF_activity.regulon()` is
-the only RNA-only-input function in the package.
+the only RNA-only-input function in the package. `bulk_rna_loader.py`'s
+generic format auto-detection then needed real, dataset-specific fixes
+across two debugging rounds: `symbol_column` overrides for ~10 datasets
+whose gene-identifier column wasn't the DataFrame index LINGER expects
+(Ensembl-vs-symbol or a named non-index column), `openpyxl`/`xlrd` added
+for real `.xlsx`/legacy `.xls` inputs, and `GSE83599`/`GSE135703_adult_SC`/
+`GSE266157`/`GSE111349_sorted_ihc_ohc` excluded (no usable symbol data,
+confirmed by direct inspection, not assumed). Final run: **41 datasets**
+(37 bulk + 4 baseline), 586 TFs, `module7_aggregate` completed.
 
 **Module 8 (in silico perturbation) — resolved 2026-09-08, bypass chosen.**
 Was blocked on a real API gap: `perturb.load_data_ptb()`'s four required
@@ -461,9 +535,13 @@ read: a real cyclic-dependency bug in `06_grn_inference.smk`'s
 `linger_celltype_grn` rule (`{celltype}.done`'s wildcard could ambiguously
 match `population_training.done` itself) — fixed with an explicit
 `wildcard_constraints` block, confirmed via a real `snakemake -n` dry-run
-that surfaced it while integrating Module 7.
+that surfaced it while integrating Module 7. **Sanity check run 2026-09-10:
+median Spearman ρ = 0.797** (23,082 genes, 80% above ρ>0.3) — clearly
+positive, so the flagged TF-ordering risk did not materialise; `module8_all`
+run for real on this basis.
 
-**Module 9 (validation) — built 2026-09-08.** Per-check logic in
+**Module 9 (validation) — built 2026-09-08, two real result-correctness
+bugs found and fixed 2026-09-13.** Per-check logic in
 `09_validation.smk`'s `CHECK_SPECS`: the two reprogramming checks
 (`atoh1_gfi1_pou4f3_overexpression`, `tbx2_conversion`) compare a named
 Module 8 knockout prediction against each held-out dataset's real
@@ -481,11 +559,69 @@ isn't specified anywhere upstream — this uses each dataset's overall mean
 expression, worth revisiting against real per-condition labels if a
 dataset has them.
 
-**Module 10 (GRN benchmarking)** — built as a bespoke bedtools-intersect +
-AUROC/AUPR script, since `LingerGRN.Benchmk.bm_trans()` expects a ChIP-seq
-ranked-gene-list ground truth, not chromatin-interaction data. No
+**Bug 1 — hardcoded self-correlation on every aging check, found
+2026-09-13.** The original `aging_tf_activity` branch set
+`predicted_shift = real_shift` (literally the same object) and hardcoded
+`rho, pval = 1.0, 0.0` rather than computing anything — every aging
+dataset reported an identical, fabricated "perfect" correlation. Root
+cause was a real design gap, not just a coding slip: the plan doc names
+`GSE274279` **"ground truth for aging vector"** and the other four
+**"aging-vector-support"**, meaning the four support datasets should be
+scored against `GSE274279`'s real shift vector, not against themselves.
+Fixed by splitting `aging_tf_activity` into two roles
+(`check_spec["aging_role"]`): `validate_aging_vector` computes and writes
+out `GSE274279`'s real shift as a genuine Snakemake output; the four
+`validate_aging_support` jobs declare that file as a real input and
+Spearman-correlate / AUROC-score their own shift against it.
+
+**Bug 2 — silent NaN propagation, found immediately after fixing Bug 1.**
+Once real correlations were being computed, `GSE196870_SNHL` crashed
+`roc_auc_score` with `ValueError: Input contains NaN`. Traced to
+`bulk_rna_loader.py`: this dataset's gene-identifier column is a plain
+Ensembl ID (column 0), with real gene symbols in a separately-named
+`gene` column that `_coerce_numeric_columns()` correctly drops as
+non-numeric "sample" data but which was never promoted to `var_names` —
+so 0/586 TFs overlapped the GRN's symbol space and every activity score
+came back NaN. Fixed with `symbol_column: gene` on this one config entry
+(same mechanism already used for ~10 other datasets). Separately hardened
+both `_auroc_aupr()` and the `spearmanr()` call sites to explicitly drop
+NaN entries with a visible log line instead of relying on
+`scipy`'s silent `nan_policy='propagate'`, which had been masking the same
+class of problem without surfacing it.
+
+**Real result, not further debugged away:** of the four checks with a
+real external comparison, one passes
+(`atoh1_gfi1_pou4f3_overexpression`, ρ=0.44) and three don't
+(`tbx2_conversion` FAILs on sign; the negative control FAILs by scoring
+almost as strongly as the real positive checks; all three usable
+`aging_vector_support` datasets sit at ρ≈0, non-significant or barely
+significant with a tiny effect size). This is the pipeline correctly
+reporting a real, partially negative validation outcome — worth treating
+as a scientific finding about the model's discriminative power and aging
+extrapolation, not as a bug to keep chasing.
+
+**Module 10 (GRN benchmarking) — built 2026-09-05, run 2026-09-13 after
+one resourcing and two data fixes.** Built as a bespoke bedtools-intersect
++ AUROC/AUPR script, since `LingerGRN.Benchmk.bm_trans()` expects a
+ChIP-seq ranked-gene-list ground truth, not chromatin-interaction data. No
 dependency on Modules 8/9. Integrated into the Snakefile 2026-09-08
-alongside Modules 7-9, unchanged from its original build.
+alongside Modules 7-9. Two prior-data fixes on 2026-09-11:
+`GSE150391_cutrun_pou4f3` split into two separately-scored contexts
+(`_wt_hc` native binding vs. `_mef_reprogram` reprogramming binding, each
+pinned to real GSM accessions via `file_glob` rather than an
+alphabetical-first-match guess); `GSE181307_cutrun` marked `role: skip`
+after confirming its directory holds only bigWig signal tracks, no called
+peaks. The added per-context work pushed `benchmark_grn_edges` past its
+90-minute runtime grant on 2026-09-13 (job killed by the SGE wall clock,
+not a Python exception — confirmed via an empty log and a `.error` file
+with no traceback); fixed by bumping `runtime_min` to 360, no code change
+needed. **Real result:** `cis_RE_TG` vs. Hi-C loops is flat and
+near-chance (AUROC 0.51–0.52) across all 16 cell types — expected given
+the edge universe is fixed at the population level and only the score
+column is cell-type-specific, confirmed by diffing the RE column across
+two cell types' output files. `TF_RE_binding` vs. CUT&RUN varies
+meaningfully by cell type (Atoh1 AUROC 0.58–0.78, Pou4f3 0.53–0.66), a
+genuine signal.
 
 ---
 
