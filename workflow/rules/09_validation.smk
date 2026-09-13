@@ -22,26 +22,58 @@
 #   - aging_vector / aging_vector_support: Module 7's role="baseline" mean
 #     TF activity as the "unperturbed" reference, diffed against each
 #     aging dataset's own TF activity (computed the same way Module 7
-#     computes it). No Module 8 dependency for these four.
+#     computes it). No Module 8 dependency for these five.
+#     REVISED 2026-09-13 per linger_cochlear_pipeline_progress02.html:
+#     GSE274279 ("aging_vector") is the plan doc's designated ground
+#     truth — its shift vector is computed once (validate_aging_vector,
+#     below) and written to disk. The four "aging_vector_support"
+#     datasets (validate_aging_support, below) each depend on that file
+#     as a real Snakemake input and are Spearman-correlated /
+#     AUROC-scored against it — not against themselves, which is what an
+#     earlier version of this pipeline mistakenly did.
 #   - negative_control_must_not_reprogram: same machinery as the
 #     overexpression check, but PASS means the correlation/AUROC signal
 #     should NOT look reprogramming-consistent (invert_pass=True in
 #     aggregate_validation.py's pass/fail logic).
 # =============================================================================
 
+import json
+import re
+
 MODULE9_DIR = f"{SCRATCH}/module9_validation"
 
 CHECK_SPECS = {
     "atoh1_gfi1_pou4f3_overexpression": {"mode": "expression_shift", "ko_id": "triple_ko", "sign": -1, "invert_pass": False, "top_k": 200},
     "tbx2_conversion":                  {"mode": "expression_shift", "ko_id": "tbx2_ko",   "sign": 1,  "invert_pass": False, "top_k": 200},
-    "aging_vector":                     {"mode": "aging_tf_activity", "ko_id": None, "sign": None, "invert_pass": False, "top_k": 200},
-    "aging_vector_support":             {"mode": "aging_tf_activity", "ko_id": None, "sign": None, "invert_pass": False, "top_k": 200},
+    "aging_vector":                     {"mode": "aging_tf_activity", "ko_id": None, "sign": None, "invert_pass": False, "top_k": 200, "aging_role": "reference"},
+    "aging_vector_support":             {"mode": "aging_tf_activity", "ko_id": None, "sign": None, "invert_pass": False, "top_k": 200, "aging_role": "support"},
     "negative_control_must_not_reprogram": {"mode": "expression_shift", "ko_id": "triple_ko", "sign": -1, "invert_pass": True, "top_k": 200},
 }
 
 _HELD_OUT_ENTRIES = {e["sample_id"]: e for e in HELD_OUT_CFG}
 _HELD_OUT_ENTRIES[NEGATIVE_CONTROL_CFG["sample_id"]] = NEGATIVE_CONTROL_CFG
 VALIDATION_SAMPLE_IDS = list(_HELD_OUT_ENTRIES.keys())
+
+# Aging checks are handled by two dedicated rules (validate_aging_vector,
+# validate_aging_support) instead of the generic validate_one, since the
+# support datasets need a real Snakemake dependency on the reference
+# dataset's output. validate_one is scoped (via wildcard_constraints,
+# below) to every other sample_id so the three rules' outputs never
+# collide on the same {sample_id}_score.tsv target.
+_AGING_VECTOR_IDS = [sid for sid, e in _HELD_OUT_ENTRIES.items() if e["check"] == "aging_vector"]
+if len(_AGING_VECTOR_IDS) != 1:
+    raise ValueError(
+        f"Expected exactly one held_out_inputs entry with check=='aging_vector', "
+        f"found {len(_AGING_VECTOR_IDS)}: {_AGING_VECTOR_IDS}"
+    )
+AGING_VECTOR_SAMPLE_ID = _AGING_VECTOR_IDS[0]
+AGING_SUPPORT_SAMPLE_IDS = [sid for sid, e in _HELD_OUT_ENTRIES.items() if e["check"] == "aging_vector_support"]
+OTHER_SAMPLE_IDS = [
+    sid for sid in VALIDATION_SAMPLE_IDS
+    if sid != AGING_VECTOR_SAMPLE_ID and sid not in AGING_SUPPORT_SAMPLE_IDS
+]
+_OTHER_SAMPLE_ID_PATTERN = "|".join(re.escape(sid) for sid in OTHER_SAMPLE_IDS)
+_AGING_SUPPORT_ID_PATTERN = "|".join(re.escape(sid) for sid in AGING_SUPPORT_SAMPLE_IDS)
 
 
 def _validation_entry_json(wildcards):
@@ -71,6 +103,8 @@ def _validation_inputs(wildcards):
 
 
 rule validate_one:
+    wildcard_constraints:
+        sample_id = _OTHER_SAMPLE_ID_PATTERN,
     input:
         unpack(_validation_inputs),
     output:
@@ -103,6 +137,88 @@ rule validate_one:
             --entry-json {params.entry_json:q} \
             --check-spec-json {params.check_spec_json:q} \
             --output-tsv {output.score}
+        """
+
+
+rule validate_aging_vector:
+    # Single, non-wildcarded job for the plan doc's designated aging-vector
+    # dataset (GSE274279). Computes its real TF-activity shift vs Module
+    # 7's baseline and writes it out so validate_aging_support can depend
+    # on it directly instead of recomputing/self-comparing.
+    input:
+        module7_summary = f"{SCRATCH}/module7_tf_activity/tf_activity_summary.tsv",
+    output:
+        score = f"{MODULE9_DIR}/{AGING_VECTOR_SAMPLE_ID}_score.tsv",
+        shift = f"{MODULE9_DIR}/{AGING_VECTOR_SAMPLE_ID}_aging_shift.tsv",
+    params:
+        workdir  = f"{SCRATCH}/module4_linger_init",
+        grn_dir  = LINGER_CFG["grn_dir"],
+        genome   = LINGER_CFG["genome"],
+        module8_dir = f"{SCRATCH}/module8_perturbation",
+        module7_summary = f"{SCRATCH}/module7_tf_activity/tf_activity_summary.tsv",
+        entry_json = json.dumps(_HELD_OUT_ENTRIES[AGING_VECTOR_SAMPLE_ID]),
+        check_spec_json = json.dumps(CHECK_SPECS["aging_vector"]),
+    log:
+        f"{SCRATCH}/logs/09a_validate_{AGING_VECTOR_SAMPLE_ID}.log",
+    resources:
+        runtime   = config["resources"]["validate_one"]["runtime_min"],
+        sge_extra = sge_extra("validate_one"),
+    shell:
+        r"""
+        set -euo pipefail
+        exec &> {log}
+        export PATH="{LINGER_ENV_BIN}:$PATH"
+        export LD_LIBRARY_PATH="{LINGER_ENV_LIB}:$LD_LIBRARY_PATH"
+        {LINGER_PYTHON} workflow/scripts/validate_held_out.py \
+            --workdir {params.workdir} \
+            --grn-dir {params.grn_dir} \
+            --genome {params.genome} \
+            --module8-dir {params.module8_dir} \
+            --module7-summary {params.module7_summary} \
+            --entry-json {params.entry_json:q} \
+            --check-spec-json {params.check_spec_json:q} \
+            --output-tsv {output.score} \
+            --output-shift-tsv {output.shift}
+        """
+
+
+rule validate_aging_support:
+    wildcard_constraints:
+        sample_id = _AGING_SUPPORT_ID_PATTERN,
+    input:
+        module7_summary = f"{SCRATCH}/module7_tf_activity/tf_activity_summary.tsv",
+        aging_vector_shift = f"{MODULE9_DIR}/{AGING_VECTOR_SAMPLE_ID}_aging_shift.tsv",
+    output:
+        score = f"{MODULE9_DIR}/{{sample_id}}_score.tsv",
+    params:
+        workdir  = f"{SCRATCH}/module4_linger_init",
+        grn_dir  = LINGER_CFG["grn_dir"],
+        genome   = LINGER_CFG["genome"],
+        module8_dir = f"{SCRATCH}/module8_perturbation",
+        module7_summary = f"{SCRATCH}/module7_tf_activity/tf_activity_summary.tsv",
+        entry_json = lambda wildcards: json.dumps(_HELD_OUT_ENTRIES[wildcards.sample_id]),
+        check_spec_json = json.dumps(CHECK_SPECS["aging_vector_support"]),
+    log:
+        f"{SCRATCH}/logs/09a_validate_{{sample_id}}.log",
+    resources:
+        runtime   = config["resources"]["validate_one"]["runtime_min"],
+        sge_extra = sge_extra("validate_one"),
+    shell:
+        r"""
+        set -euo pipefail
+        exec &> {log}
+        export PATH="{LINGER_ENV_BIN}:$PATH"
+        export LD_LIBRARY_PATH="{LINGER_ENV_LIB}:$LD_LIBRARY_PATH"
+        {LINGER_PYTHON} workflow/scripts/validate_held_out.py \
+            --workdir {params.workdir} \
+            --grn-dir {params.grn_dir} \
+            --genome {params.genome} \
+            --module8-dir {params.module8_dir} \
+            --module7-summary {params.module7_summary} \
+            --entry-json {params.entry_json:q} \
+            --check-spec-json {params.check_spec_json:q} \
+            --output-tsv {output.score} \
+            --aging-vector-tsv {input.aging_vector_shift}
         """
 
 

@@ -14,9 +14,27 @@ rather than invented from scratch:
     OPPOSITE direction of what Module 8 simulated (TF gain vs TF loss).
   - Aging checks use Module 7's role="baseline" regulon scores as the
     "unperturbed" reference point, per the plan doc and last session's
-    revised-plan table, diffed against the held-out dataset's own
+    revised-plan table, diffed against each aging dataset's own
     TF-activity profile (computed here the same way Module 7 does, via
     TF_activity.regulon(network="cell population")).
+    REVISED 2026-09-13 per linger_cochlear_pipeline_progress02.html: the
+    plan doc names GSE274279 the "ground truth for aging vector" and the
+    other four aging datasets "aging-vector-support" — i.e. the four
+    support datasets are meant to be checked AGAINST GSE274279's shift
+    vector, not merely diffed against baseline in isolation. Two roles,
+    set via check_spec["aging_role"]:
+      - "reference" (GSE274279 / check=aging_vector): computes its own
+        real_shift vs Module 7 baseline and writes it to
+        --output-shift-tsv as "the aging vector". No external ground
+        truth exists for this row, so its own rho/auroc/aupr are NaN —
+        it's the reference, not a result to score.
+      - "support" (check=aging_vector_support): computes its own
+        real_shift the same way, then Spearman-correlates it against the
+        reference vector (read from --aging-vector-tsv) and computes
+        AUROC/AUPR treating the reference's top-K |shift| TFs as the
+        "hit" ground truth and this dataset's |shift| as the score. This
+        is the actual "does this independent aging dataset agree with
+        the aging vector's direction" check the plan doc describes.
   - Negative control: same shift-comparison machinery as the positive
     reprogramming checks, but the PASS condition is inverted — this
     dataset's real profile should NOT correlate with the reprogramming
@@ -70,6 +88,13 @@ p.add_argument("--check-spec-json", required=True,
                      '"ko_id": "<module8 ko_id>"|null, "sign": 1|-1, '
                      '"invert_pass": true|false, "top_k": 200}')
 p.add_argument("--output-tsv", required=True)
+p.add_argument("--output-shift-tsv", default=None,
+               help="Only used when check_spec['aging_role']=='reference': writes this "
+                    "dataset's real TF-activity shift vector so aging_vector_support "
+                    "checks can be correlated against it.")
+p.add_argument("--aging-vector-tsv", default=None,
+               help="Only used when check_spec['aging_role']=='support': path to the "
+                    "reference ('aging_vector') shift vector written via --output-shift-tsv.")
 args = p.parse_args()
 
 entry = json.loads(args.entry_json)
@@ -83,19 +108,26 @@ print(f"--- {sample_id} (check={check}, mode={spec['mode']}) ---")
 
 def _auroc_aupr(real_shift, predicted_shift, top_k):
     common = real_shift.index.intersection(predicted_shift.index)
-    if len(common) < 10:
-        return np.nan, np.nan, len(common)
     real = real_shift.loc[common]
     pred = predicted_shift.loc[common]
-    k = min(top_k, len(common) // 2)
+    finite = real.notna() & pred.notna()
+    n_dropped = int((~finite).sum())
+    if n_dropped:
+        print(f"_auroc_aupr: dropping {n_dropped}/{len(finite)} entries with NaN "
+              f"(undefined TF-activity/shift, e.g. zero-variance regulon in a small "
+              f"dataset) before scoring: {list(real.index[~finite])}")
+    real, pred = real[finite], pred[finite]
+    if len(real) < 10:
+        return np.nan, np.nan, len(real)
+    k = min(top_k, len(real) // 2)
     if k < 2:
-        return np.nan, np.nan, len(common)
+        return np.nan, np.nan, len(real)
     threshold = real.abs().sort_values(ascending=False).iloc[k - 1]
     labels = (real.abs() >= threshold).astype(int).values
     scores = pred.abs().values
     if len(set(labels)) < 2:
-        return np.nan, np.nan, len(common)
-    return roc_auc_score(labels, scores), average_precision_score(labels, scores), len(common)
+        return np.nan, np.nan, len(real)
+    return roc_auc_score(labels, scores), average_precision_score(labels, scores), len(real)
 
 
 if spec["mode"] == "expression_shift":
@@ -121,10 +153,15 @@ if spec["mode"] == "expression_shift":
     print(f"predicted_shift: {len(predicted_shift)} genes (Module 8 {ko_id}, sign={spec['sign']})")
 
     common = real_shift.index.intersection(predicted_shift.index)
-    if len(common) < 10:
+    real_c, pred_c = real_shift.loc[common], predicted_shift.loc[common]
+    finite = real_c.notna() & pred_c.notna()
+    if (~finite).sum():
+        print(f"spearman: dropping {int((~finite).sum())}/{len(finite)} NaN entries before correlating")
+    real_c, pred_c = real_c[finite], pred_c[finite]
+    if len(real_c) < 10:
         rho, pval = np.nan, np.nan
     else:
-        rho, pval = spearmanr(real_shift.loc[common], predicted_shift.loc[common])
+        rho, pval = spearmanr(real_c, pred_c)
     auroc, aupr, n_common = _auroc_aupr(real_shift, predicted_shift, top_k)
 
 elif spec["mode"] == "aging_tf_activity":
@@ -143,14 +180,50 @@ elif spec["mode"] == "aging_tf_activity":
 
     common_tfs = real_mean.index.intersection(baseline_mean.index)
     real_shift = real_mean.loc[common_tfs] - baseline_mean.loc[common_tfs]
-    predicted_shift = real_shift  # no Module 8 prediction for aging — this check validates the
-                                  # baseline reference itself is a sensible "unperturbed" anchor;
-                                  # reported for consistency, not a real predicted-vs-real comparison.
-    print(f"aging TF-activity shift computed for {len(real_shift)} TFs — "
-          f"NOTE: no Module 8 prediction feeds this check (see docstring); "
-          f"rho/AUROC/AUPR reported for consistency of output shape only.")
-    rho, pval = 1.0, 0.0  # trivially self-correlated — see NOTE above
-    auroc, aupr, n_common = np.nan, np.nan, len(real_shift)
+
+    aging_role = spec.get("aging_role")
+    if aging_role == "reference":
+        # This dataset IS "the aging vector" (GSE274279 per the plan doc) —
+        # there's no external ground truth to score it against, so it's
+        # reported descriptively (NaN rho/auroc/aupr) and written out for
+        # the "support" datasets to correlate against.
+        if args.output_shift_tsv:
+            real_shift.rename("shift").to_frame().to_csv(args.output_shift_tsv, sep="\t")
+            print(f"aging vector: wrote {len(real_shift)}-TF reference shift to {args.output_shift_tsv}")
+        else:
+            print("WARNING: aging_role=='reference' but --output-shift-tsv not given — "
+                  "aging_vector_support checks will have nothing to correlate against")
+        rho, pval = np.nan, np.nan
+        auroc, aupr, n_common = np.nan, np.nan, len(real_shift)
+
+    elif aging_role == "support":
+        if not args.aging_vector_tsv:
+            raise ValueError("check_spec['aging_role']=='support' requires --aging-vector-tsv "
+                              "(the reference aging_vector dataset's shift file)")
+        aging_vector = pd.read_csv(args.aging_vector_tsv, sep="\t", index_col=0)["shift"]
+        common = real_shift.index.intersection(aging_vector.index)
+        print(f"aging TF-activity shift computed for {len(real_shift)} TFs "
+              f"({len(common)} shared with the reference aging vector)")
+        av_c, rs_c = aging_vector.loc[common], real_shift.loc[common]
+        finite = av_c.notna() & rs_c.notna()
+        if (~finite).sum():
+            print(f"spearman: dropping {int((~finite).sum())}/{len(finite)} NaN entries "
+                  f"before correlating (undefined TF-activity, likely zero-variance "
+                  f"regulon genes in this dataset): {list(av_c.index[~finite])}")
+        av_c, rs_c = av_c[finite], rs_c[finite]
+        if len(av_c) < 10:
+            rho, pval = np.nan, np.nan
+        else:
+            rho, pval = spearmanr(av_c, rs_c)
+        # Reference vector's top-K |shift| TFs = ground-truth "hit" set;
+        # this dataset's |shift| = score — same convention as _auroc_aupr
+        # uses elsewhere (real_shift=ground truth, predicted_shift=score).
+        auroc, aupr, n_common = _auroc_aupr(aging_vector, real_shift, top_k)
+
+    else:
+        raise ValueError("check_spec['mode']=='aging_tf_activity' requires "
+                          "check_spec['aging_role'] to be 'reference' or 'support', "
+                          f"got: {aging_role!r}")
 
 else:
     raise ValueError(f"Unknown check spec mode: {spec['mode']}")
