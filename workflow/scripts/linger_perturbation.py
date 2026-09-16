@@ -40,6 +40,30 @@ almost certainly does NOT match what population_training's nets were
 trained against, and knockout output from this pipeline should not be
 trusted until that's resolved (e.g. checking whether PYTHONHASHSEED was
 fixed in the LINGER conda env at training time).
+
+CELL-TYPE-RESOLVED MODE (--target-path/--opn-path, added 2026-09-16):
+The net's weights are population-trained (that can't change — one
+{chr}_net.pt per chromosome, shared), but nothing about the forward pass
+above requires the INPUT be population-pooled: normalization is recomputed
+live from whatever inputs this call receives, not from statistics baked in
+at training time. Passing --target-path/--opn-path swaps in a cell-type
+(or any other) pseudobulk instead of the default population one
+(WORKDIR/data/TG_pseudobulk.tsv / RE_pseudobulk.tsv).
+
+Exp for the substituted Target is built by REINDEXING to the exact TF row
+order in the persisted population Exp.tsv (Exp.reindex(...)), NOT by
+recomputing a fresh TFlist via set() intersection the way
+prep_pseudobulk_target.py does for the population case. This matters:
+re-deriving TFlist per cell type would reintroduce the exact
+PYTHONHASHSEED-dependent ordering risk the population run's sanity check
+(median rho=0.797) already worked around — reusing the population run's
+already-validated order is what keeps that validation applicable here.
+
+Run --sanity-check in this mode too (against the cell-type Target, not the
+population one) before trusting any cell-type knockout output — the
+population sanity check does NOT establish that a cell type's narrower
+input distribution behaves in-distribution for a net trained on pooled
+population statistics. See prep_pseudobulk_target_celltype.py's docstring.
 """
 import argparse
 import ast
@@ -68,14 +92,42 @@ p.add_argument("--ko-id", required=True)
 p.add_argument("--tf-list", nargs="*", default=[], help="TFs to zero. Empty list == sanity-check baseline (no knockout).")
 p.add_argument("--sanity-check", action="store_true",
                 help="Also compute predicted-vs-real correlation against Target — forces --tf-list to be ignored for scoring purposes (still applied to the forward pass if given).")
+p.add_argument("--target-path", default=None,
+                help="Override Target pseudobulk (default: WORKDIR/data/TG_pseudobulk.tsv, population-level). "
+                     "Pass a cell-type pseudobulk (see prep_pseudobulk_target_celltype.py) for cell-type-resolved mode.")
+p.add_argument("--opn-path", default=None,
+                help="Override Opn (RE accessibility) pseudobulk (default: WORKDIR/data/RE_pseudobulk.tsv, population-level).")
 p.add_argument("--output-tsv", required=True)
 args = p.parse_args()
 
 WORKDIR = args.workdir
 
-Exp = pd.read_csv(os.path.join(args.module8_dir, "Exp.tsv"), sep="\t", index_col=0)
-Opn = pd.read_csv(os.path.join(WORKDIR, "data", "RE_pseudobulk.tsv"), sep=",", header=0, index_col=0)
-Target = pd.read_csv(os.path.join(WORKDIR, "data", "TG_pseudobulk.tsv"), sep=",", header=0, index_col=0)
+# Persisted population Exp — always loaded, since its row (TF) order is what
+# every {chr}_net.pt was trained against and is reused below regardless of
+# which Target/Opn actually feed the forward pass.
+Exp_population = pd.read_csv(os.path.join(args.module8_dir, "Exp.tsv"), sep="\t", index_col=0)
+
+target_path = args.target_path or os.path.join(WORKDIR, "data", "TG_pseudobulk.tsv")
+opn_path = args.opn_path or os.path.join(WORKDIR, "data", "RE_pseudobulk.tsv")
+Opn = pd.read_csv(opn_path, sep=",", header=0, index_col=0)
+Target = pd.read_csv(target_path, sep=",", header=0, index_col=0)
+
+if args.target_path is None:
+    # Population mode, unchanged from before: Exp is the persisted file as-is.
+    Exp = Exp_population
+else:
+    # Cell-type (or other substituted) mode: reindex to the population Exp's
+    # exact TF row order rather than recomputing a fresh set() intersection —
+    # see this script's docstring, CELL-TYPE-RESOLVED MODE, for why.
+    missing_tfs = [tf for tf in Exp_population.index if tf not in Target.index]
+    if missing_tfs:
+        print(f"WARNING: {len(missing_tfs)} of {len(Exp_population.index)} population TFs "
+              f"not present in the substituted Target ({target_path}) — these rows will be "
+              f"NaN after reindex and will break the forward pass. Missing: {missing_tfs}")
+    Exp = Target.reindex(Exp_population.index)
+    print(f"Cell-type-resolved mode: Exp reindexed to population's {len(Exp_population.index)}-TF "
+          f"order from {target_path} ({Exp.shape[1]} pseudo-samples).")
+
 RE_TGlink = pd.read_csv(os.path.join(args.module8_dir, "RE_TGlink_resolved.tsv"), sep="\t")
 re_col = [c for c in RE_TGlink.columns if c not in ("gene", "chr")][0]
 RE_TGlink[re_col] = RE_TGlink[re_col].apply(ast.literal_eval)

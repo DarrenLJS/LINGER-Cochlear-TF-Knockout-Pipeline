@@ -464,6 +464,44 @@ doesn't just say "done" without showing what that means:
   as post-hoc benchmarking ground truth (Module 10) rather than as
   inference-time constraints; post-hoc edge reweighting and
   training-loop-regularization approaches were considered and deferred.
+- **Module 1 gene-level mito/blood-gene removal, added 2026-09-16.**
+  `max_pct_mito` was always a per-CELL QC gate (drop cells whose reads are
+  >15% mitochondrial) — it never removed the mito genes themselves from the
+  feature set, and nothing removed hemoglobin/erythroid genes at all. Real
+  gap, not a considered trade-off — confirmed by grepping the repo for any
+  hemoglobin/blood handling and finding none, and by
+  `cluster_annotation.tsv` showing an actual "Macrophage-immune cell"
+  population present in the 2026-09-13 run. Fixed in `qc_lib.py`'s
+  `qc_filter_rna()`: mito genes and a `HB_ERYTHROID_GENES` panel (core
+  hemoglobin chains + erythroid-restricted accessory genes) are now
+  stripped from `.var`/`.X` per-sample, after the existing `pct_counts_mt`
+  cell gate (which still needs mito genes present to compute) and before
+  Module 3's `normalize_total` (so their counts no longer skew every other
+  gene's library-size normalization). Gated by new `qc_params.remove_mito_genes`
+  / `remove_hb_genes` (both default `true`), not hardcoded.
+- **Module 8b — cell-type-resolved perturbation, added 2026-09-16.** Module
+  8's forward pass always ran a single population-pooled pseudobulk through
+  the shared `{chr}_net.pt` nets. Nothing about the net or its (call-time-
+  recomputed) normalization required that — only what Module 8's own bypass
+  scripts happened to load. `prep_pseudobulk_target_celltype.py` builds a
+  cell-type-restricted pseudobulk (same `LingerGRN.pseudo_bulk.pseudo_bulk()`
+  call Module 4 uses, subset to one cell type's cells first); `linger_perturbation.py`
+  gained `--target-path`/`--opn-path` overrides, reindexing `Exp` to the
+  *exact* TF row order in the already-sanity-checked population `Exp.tsv`
+  (`Exp.reindex(...)`) rather than recomputing a fresh `set()` intersection
+  — re-deriving it per cell type would reintroduce the
+  `PYTHONHASHSEED`-dependent TF-ordering risk the population run's sanity
+  check (median ρ=0.797) already worked around. A separate per-cell-type
+  sanity check is mandatory before trusting any cell-type knockout output —
+  the population check doesn't establish that a cell type's narrower input
+  distribution is in-distribution for a net trained on pooled statistics.
+  Deliberately scoped to cell-type-resolution only for this round; the
+  identical mechanism would support a held-out-dataset-specific variant,
+  deferred until the cell-type version is validated against real data.
+  Motivated in part by Module 9's negative-control failure (see Results
+  snapshot / Next steps above) — pooling all cell types into one input is a
+  plausible contributor to knockout predictions not discriminating strongly
+  by condition, worth checking once real per-cell-type numbers exist.
 
 ---
 

@@ -151,12 +151,57 @@ LOADERS = {
 # QC PIPELINE
 # =============================================================================
 
+# Mouse (mm10/mm39) hemoglobin + erythroid-lineage gene symbols. Used to
+# strip blood-contaminant genes from the feature set entirely (separate from
+# and in addition to the mito-gene removal below) — see qc_filter_rna()'s
+# 2026-09-16 addition. Matched case-insensitively against rna.var_names, and
+# every gene actually found+dropped is logged by the caller
+# (qc_preprocess_sample.py) rather than assumed silently present, since this
+# is a cochlea dataset and not every symbol below is guaranteed to occur.
+HB_ERYTHROID_GENES = {
+    # core hemoglobin chains (embryonic + adult + minor)
+    "hba-a1", "hba-a2", "hba-x", "hbb-bs", "hbb-bt", "hbb-bh1", "hbb-y",
+    "hbb-bh2", "hbq1a", "hbq1b",
+    # erythroid-restricted accessory / membrane genes
+    "alas2", "slc4a1", "gypa", "ermap", "rhd", "rhag", "ahsp", "erdr1",
+}
+
+
 def qc_filter_rna(rna, params):
     rna.var["mt"] = rna.var_names.str.lower().str.startswith("mt-")
+    rna.var["hb"] = rna.var_names.str.lower().isin(HB_ERYTHROID_GENES)
     sc.pp.calculate_qc_metrics(rna, qc_vars=["mt"], percent_top=None, log1p=False, inplace=True)
     sc.pp.filter_cells(rna, min_genes=params["min_genes_per_cell"])
     sc.pp.filter_genes(rna, min_cells=params["min_cells_per_gene"])
+    # Per-cell mito QC gate — must run BEFORE mito genes are dropped below,
+    # since pct_counts_mt needs the mito genes present in rna.var/X to compute.
     rna = rna[rna.obs["pct_counts_mt"] < params["max_pct_mito"]].copy()
+
+    # Gene-level removal (separate from the cell-level gate above): drop the
+    # mito genes themselves and any matched blood/erythroid genes from the
+    # feature set, gated by config so this is toggleable, not hardcoded.
+    # Order matters for two reasons: (1) it must happen after the pct_mito
+    # cell filter above, which needs mito genes present to compute; (2) it
+    # must happen before Module 3's normalize_total (library-size
+    # normalization), since leaving these genes in would let their counts
+    # skew the per-cell size factor every other gene gets normalized by.
+    n_mt_found = int(rna.var["mt"].sum())
+    n_hb_found = int(rna.var["hb"].sum())
+    drop_mask = pd.Series(False, index=rna.var_names)
+    if params.get("remove_mito_genes", True):
+        drop_mask |= rna.var["mt"].values
+    if params.get("remove_hb_genes", True):
+        drop_mask |= rna.var["hb"].values
+    if drop_mask.any():
+        dropped_names = rna.var_names[drop_mask.values].tolist()
+        print(f"    Gene-level QC: dropping {drop_mask.sum()} genes "
+              f"({n_mt_found} mito matched, {n_hb_found} hb/erythroid matched; "
+              f"config remove_mito_genes={params.get('remove_mito_genes', True)}, "
+              f"remove_hb_genes={params.get('remove_hb_genes', True)}): {dropped_names}")
+        rna = rna[:, ~drop_mask.values].copy()
+    else:
+        print("    Gene-level QC: no mito/hb genes matched or removal disabled — none dropped")
+
     return rna
 
 

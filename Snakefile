@@ -158,6 +158,7 @@ include: "workflow/rules/04_linger_init.smk"
 include: "workflow/rules/06_grn_inference.smk"
 include: "workflow/rules/07_bulk_tf_activity.smk"
 include: "workflow/rules/08_perturbation.smk"
+include: "workflow/rules/08b_perturbation_celltype.smk"
 include: "workflow/rules/09_validation.smk"
 include: "workflow/rules/10_grn_benchmarking.smk"
 # 05_chromatin_priors.smk not built — Module 5 decided as Option A, folded

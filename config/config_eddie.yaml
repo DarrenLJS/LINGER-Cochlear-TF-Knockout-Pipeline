@@ -710,6 +710,12 @@ qc_params:
   scrublet_expected_doublet_rate: 0.06
   scrublet_random_state: 0
   merge_gap_bp: 0            # bedtools merge -d for consensus peak set
+  # Gene-level removal (separate from the max_pct_mito per-CELL gate above,
+  # which stays as-is). Added 2026-09-16: strips mito genes and the
+  # HB_ERYTHROID_GENES panel (qc_lib.py) from the feature set entirely,
+  # applied per-sample in qc_filter_rna() before Module 3's normalization.
+  remove_mito_genes: true
+  remove_hb_genes: true
 
 # ---------------------------------------------------------------------------
 # Module 3 — integration & cell typing
@@ -1053,3 +1059,15 @@ perturbation:
     pou4f3_ko: ["Pou4f3"]
     triple_ko: ["Atoh1", "Gfi1", "Pou4f3"]
     tbx2_ko: ["Tbx2"]
+  # Module 8b (08b_perturbation_celltype.smk), added 2026-09-16.
+  # enabled_celltypes: "all" runs every cell type from cluster_annotation.tsv
+  # that clears min_cells_for_pseudobulk; set to an explicit list (e.g.
+  # ["Hair cell", "Supporting cell"]) to restrict to specific cell types
+  # instead. min_cells_for_pseudobulk is a judgment call, not a validated
+  # number — 100 is a starting point, reconsider after looking at the real
+  # per-cell-type sanity check results (small clusters like the ~41-cell
+  # Macrophage-immune cell population from the 2026-09-13 run are exactly
+  # the case this threshold exists to guard against).
+  celltype_knockouts:
+    enabled_celltypes: "all"
+    min_cells_for_pseudobulk: 100
