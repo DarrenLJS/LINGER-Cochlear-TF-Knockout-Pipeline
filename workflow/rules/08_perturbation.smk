@@ -44,8 +44,25 @@
 # function simulation mode here.
 # =============================================================================
 
+import re
+
 MODULE8_DIR = f"{SCRATCH}/module8_perturbation"
 KNOCKOUTS = config["perturbation"]["knockouts"]  # dict: ko_id -> [TF, TF, ...]
+
+# FIX 2026-09-18 — AmbiguousRuleException between this rule's
+# linger_perturbation_ko and Module 8b's linger_perturbation_celltype_ko.
+# MODULE8B_DIR (08b_perturbation_celltype.smk) is nested directly inside
+# MODULE8_DIR (f"{MODULE8_DIR}/celltype"), and Snakemake wildcards match
+# `.+` — including literal `/` — by default. With ko_id unconstrained here,
+# a target like module8_perturbation/celltype/<celltype>/<ko_id>_predicted_
+# expression.tsv had TWO valid parses: Module 8b's intended
+# (pert_celltype, ko_id) split, and this rule's ko_id swallowing the whole
+# "celltype/<celltype>/<ko_id>" substring whole. Same class of bug as the
+# CELL_TYPES wildcard_constraints fix below in 06_grn_inference.smk (2026-
+# 09-08) — constrain the wildcard to the real, finite set of legal values
+# so it can never match a path containing `/`.
+wildcard_constraints:
+    ko_id = "|".join(re.escape(k) for k in KNOCKOUTS.keys()) if KNOCKOUTS else "(?!)"
 
 
 rule prep_pseudobulk_target:

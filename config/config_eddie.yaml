@@ -1020,6 +1020,26 @@ resources:
                           # much faster than linger_population_training's
                           # 4h+, but not benchmarked yet
 
+  # Added 2026-09-18 — prep_pseudobulk_target_celltype (08b_perturbation_
+  # celltype.smk) was reusing prep_pseudobulk_target's resources above
+  # (16GB), but that rule only READS Module 4's already-written population
+  # files, while prep_pseudobulk_target_celltype.py calls
+  # LingerGRN.pseudo_bulk.pseudo_bulk() itself, on the full labeled.h5ad +
+  # all 4 atac_consensus.h5ad, per its own docstring: "same pattern as
+  # linger_prep_pseudobulk.py, not prep_pseudobulk_target.py". That's the
+  # exact call already known to need 100GB (see linger_prep_pseudobulk
+  # above, and its 2026-07-25 SIGKILL history). Confirmed the wrong-budget
+  # bug for real: 19 of 20 array tasks were SIGKILLed with empty logs (no
+  # Python traceback — the signature of a hard memory-limit kill, not a
+  # code exception) under the borrowed 16GB cap; only Pericyte (192 cells,
+  # the smallest single-cluster cell type) fit. Give this rule its own
+  # entry, mirroring linger_prep_pseudobulk's, rather than reusing a
+  # sibling's much lighter one.
+  prep_pseudobulk_target_celltype:
+    slots: 1
+    vmem_mb: 100000
+    runtime_min: 120
+
   # --- Module 9 ---
   validate_one:
     slots: 1

@@ -167,7 +167,28 @@ for chrom in sorted(RE_TGlink["chr"].unique()):
             TFtemp = Exp_ko.drop([gene]).values
         else:
             TFtemp = Exp_ko.values
-        REtemp = Opn.loc[re_list].values
+        # FIX 2026-09-18 — Opn.loc[re_list] crashed with a KeyError the moment
+        # ANY RE in re_list (population-level, from RE_TGlink_resolved.tsv)
+        # was absent from a cell-type-restricted Opn (prep_pseudobulk_target_
+        # celltype.py's pseudo_bulk() drops a peak column entirely when it has
+        # zero signal across every cell of that subset — it isn't kept as a
+        # zero row). Every real cell type's chromatin landscape is narrower
+        # than the pooled population's, so this hit every cell type, not just
+        # one (confirmed: Pericyte, 2026-09-18, KeyError on 26 chr1 peaks).
+        # Reindex + fill 0 instead of a strict .loc[] lookup — a peak absent
+        # from this cell type's pseudobulk means "no accessibility signal
+        # observed here", i.e. closed chromatin, which IS 0, not unknown.
+        # Mirrors the TF/Exp side's reindex-with-warning pattern above, but
+        # fills 0 rather than NaN since a missing RE has a defensible concrete
+        # value (unlike a missing TF, which the code above deliberately still
+        # lets go to NaN and break — see that comment).
+        re_series = Opn.reindex(re_list)
+        missing_res = re_series.index[re_series.isna().any(axis=1)].tolist()
+        if missing_res:
+            print(f"WARNING: gene {gene}: {len(missing_res)} of {len(re_list)} REs not "
+                  f"present in Opn ({opn_path}) — filling as 0 (no accessibility signal "
+                  f"in this pseudobulk).")
+        REtemp = re_series.fillna(0).values
         inputs = np.vstack((TFtemp, REtemp))
         inputs = torch.tensor(inputs, dtype=torch.float32)
         mean = inputs.mean(dim=1)

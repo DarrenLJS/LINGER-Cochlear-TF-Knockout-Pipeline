@@ -76,8 +76,15 @@ def _celltype_knockout_types():
 
 CELLTYPE_KO_TYPES = _celltype_knockout_types()
 
+# FIX 2026-09-18 — same AmbiguousRuleException class as 08_perturbation.smk's
+# ko_id fix (see that file's comment for the full mechanism). ko_id here was
+# equally unconstrained; constraining it too closes off the identical
+# collision the moment anything else ever nests under
+# MODULE8B_DIR/{pert_celltype}/... in the future, not just today's specific
+# clash with linger_perturbation_ko.
 wildcard_constraints:
-    pert_celltype = "|".join(re.escape(c) for c in CELLTYPE_KO_TYPES) if CELLTYPE_KO_TYPES else "(?!)"
+    pert_celltype = "|".join(re.escape(c) for c in CELLTYPE_KO_TYPES) if CELLTYPE_KO_TYPES else "(?!)",
+    ko_id = "|".join(re.escape(k) for k in KNOCKOUTS.keys()) if KNOCKOUTS else "(?!)"
 
 
 rule prep_pseudobulk_target_celltype:
@@ -99,12 +106,18 @@ rule prep_pseudobulk_target_celltype:
     log:
         f"{SCRATCH}/logs/08b_prep_pseudobulk_{{pert_celltype}}.log",
     resources:
-        runtime   = config["resources"]["prep_pseudobulk_target"]["runtime_min"],
-        sge_extra = sge_extra("prep_pseudobulk_target"),
+        # FIX 2026-09-18 — was reusing prep_pseudobulk_target's (16GB) resource
+        # block, sized for a lightweight file-read, not for this rule's real
+        # pseudo_bulk() call (same memory profile as linger_prep_pseudobulk,
+        # which needs 100GB — see config_eddie.yaml's prep_pseudobulk_target_
+        # celltype entry for the full incident writeup: 19/20 array tasks were
+        # SIGKILLed under the old 16GB cap, confirmed via empty per-rule logs).
+        runtime   = config["resources"]["prep_pseudobulk_target_celltype"]["runtime_min"],
+        sge_extra = sge_extra("prep_pseudobulk_target_celltype"),
     shell:
         r"""
         set -euo pipefail
-        exec &> {log}
+        exec &> "{log}"
         export PATH="{LINGER_ENV_BIN}:$PATH"
         export LD_LIBRARY_PATH="{LINGER_ENV_LIB}:$LD_LIBRARY_PATH"
         export PYTHONHASHSEED=0
@@ -114,7 +127,7 @@ rule prep_pseudobulk_target_celltype:
             --sample-ids {params.sample_ids} \
             --celltype "{wildcards.pert_celltype}" \
             --min-cells {params.min_cells} \
-            --output-dir {params.outdir}
+            --output-dir "{params.outdir}"
         """
 
 
@@ -140,7 +153,7 @@ rule linger_perturbation_celltype_sanity_check:
     shell:
         r"""
         set -euo pipefail
-        exec &> {log}
+        exec &> "{log}"
         export PATH="{LINGER_ENV_BIN}:$PATH"
         export LD_LIBRARY_PATH="{LINGER_ENV_LIB}:$LD_LIBRARY_PATH"
         export PYTHONHASHSEED=0
@@ -150,9 +163,9 @@ rule linger_perturbation_celltype_sanity_check:
             --ko-id "_sanity_check_baseline_{wildcards.pert_celltype}" \
             --tf-list \
             --sanity-check \
-            --target-path {input.tg} \
-            --opn-path {input.re_} \
-            --output-tsv {output.pred}
+            --target-path "{input.tg}" \
+            --opn-path "{input.re_}" \
+            --output-tsv "{output.pred}"
         echo ""
         echo "=== {wildcards.pert_celltype}: read the SANITY CHECK block above before trusting any knockout output for this cell type. ==="
         """
@@ -182,7 +195,7 @@ rule linger_perturbation_celltype_ko:
     shell:
         r"""
         set -euo pipefail
-        exec &> {log}
+        exec &> "{log}"
         export PATH="{LINGER_ENV_BIN}:$PATH"
         export LD_LIBRARY_PATH="{LINGER_ENV_LIB}:$LD_LIBRARY_PATH"
         export PYTHONHASHSEED=0
@@ -191,9 +204,9 @@ rule linger_perturbation_celltype_ko:
             --module8-dir {params.module8_dir} \
             --ko-id "{wildcards.pert_celltype}_{wildcards.ko_id}" \
             --tf-list {params.tf_list} \
-            --target-path {input.tg} \
-            --opn-path {input.re_} \
-            --output-tsv {output.pred}
+            --target-path "{input.tg}" \
+            --opn-path "{input.re_}" \
+            --output-tsv "{output.pred}"
         """
 
 
