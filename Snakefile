@@ -160,12 +160,14 @@ include: "workflow/rules/07_bulk_tf_activity.smk"
 include: "workflow/rules/08_perturbation.smk"
 include: "workflow/rules/08b_perturbation_celltype.smk"
 include: "workflow/rules/09_validation.smk"
+include: "workflow/rules/09b_validation_celltype.smk"
 include: "workflow/rules/10_grn_benchmarking.smk"
+include: "workflow/rules/11_caps_score.smk"
 # 05_chromatin_priors.smk not built — Module 5 decided as Option A, folded
 # into Module 10's benchmarking (see README "Design notes"), not a
 # separate pipeline stage.
 #
-# Modules 6-10 are NOT added to `rule all` below, matching the existing
+# Modules 6-11 are NOT added to `rule all` below, matching the existing
 # module6_all convention — each depends on the previous stage's real
 # output existing (not just its rule being defined), and Module 6 in
 # particular depends on the manual Module 3 labeling step. Run each
@@ -175,7 +177,12 @@ include: "workflow/rules/10_grn_benchmarking.smk"
 #   module8_all  (Module 8 — perturbation; RUN linger_perturbation_sanity_check
 #                 first and read its log, see 08_perturbation.smk header)
 #   module9_all  (Module 9 — validation)
+#   module9b_aggregate  (Module 9b — cell-type-resolved validation, see
+#                 09b_validation_celltype.smk header)
 #   benchmark_grn_edges  (Module 10 — GRN benchmarking; no dependency on 7-9)
+#   module11_all  (Module 11 — CAPS score; depends on Module 9b's
+#                 validation_report_combined.tsv for confidence_weight, see
+#                 11_caps_score.smk header)
 
 # ---------------------------------------------------------------------------
 # Target rule

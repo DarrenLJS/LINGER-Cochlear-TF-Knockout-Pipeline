@@ -1051,6 +1051,55 @@ resources:
     vmem_mb: 4000
     runtime_min: 15
 
+  # --- Module 9b (ADDED 2026-09-19) ---
+  # Same per-job workload as Module 9's validate_one (one held-out bulk
+  # dataset loaded + scored against one knockout/aging-network prediction)
+  # — reusing validate_one's budget as-is rather than guessing a different
+  # number, since 09b_validation_celltype.smk's rules call the identical
+  # validate_held_out.py script with the same per-call data volume, just a
+  # different --module8-dir/--network value.
+  validate_celltype_one:
+    slots: 1
+    vmem_mb: 16000
+    runtime_min: 60
+
+  # Same per-job workload as Module 9's module9_aggregate, scaled up for
+  # more rows (population + up to 20 cell types x up to 5 checks each,
+  # vs Module 9's 6 rows) and the added per-scope sanity_rho recomputation
+  # (re-reading two already-small TSVs per scope, not re-running any
+  # model) — still a light, pure-pandas job, generous headroom over
+  # module9_aggregate's 4GB/15min rather than assumed identical.
+  module9b_aggregate:
+    slots: 1
+    vmem_mb: 8000
+    runtime_min: 30
+
+  # --- Module 11 (CAPS) ---
+  # caps_tf_activity — one TF_activity.regulon() call per (scope, ko_id or
+  # baseline), same cost class as Module 7/9's own regulon() calls over a
+  # single small predicted_expression.tsv (not a from-scratch GRN
+  # computation) — matching validate_celltype_one's headroom rather than
+  # linger_perturbation_ko's (no torch net loaded here).
+  caps_tf_activity:
+    slots: 1
+    vmem_mb: 16000
+    runtime_min: 60
+
+  # caps_score — pure pandas: two small TF-indexed TSVs, one trans-
+  # regulatory file, one already-aggregated validation report. Light job,
+  # same headroom class as module9b_aggregate.
+  caps_score:
+    slots: 1
+    vmem_mb: 8000
+    runtime_min: 15
+
+  # module11_aggregate — glob + concat of up to (1 + 20) x len(KNOCKOUTS)
+  # small CAPS rows. Same light-job class as module9b_aggregate.
+  module11_aggregate:
+    slots: 1
+    vmem_mb: 8000
+    runtime_min: 30
+
   # --- Module 10 ---
   benchmark_grn_edges:
     slots: 1

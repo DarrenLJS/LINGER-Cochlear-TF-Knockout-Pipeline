@@ -62,6 +62,44 @@ has explicit condition labels, a proper per-condition diff would be more
 rigorous than an overall-mean shift). Uses bulk_rna_loader's same
 best-effort format auto-detector as Module 7, with the same caveat about
 unverified per-dataset layouts.
+
+ADDED 2026-09-19 — --baseline-tsv / --network, for Module 9b (cell-type-
+resolved validation, 09b_validation_celltype.smk). Both default to the
+exact population behavior above (Module 9 itself calls this script with
+neither flag set, so it is completely unaffected), so this file has ONE
+implementation shared by both modules rather than a forked duplicate:
+  - --baseline-tsv overrides the "before" reference used by
+    mode=="expression_shift" (default: Module 4's population
+    TG_pseudobulk.tsv). Module 9b points this at a cell type's own
+    TG_pseudobulk_{celltype}.tsv (already written by Module 8b's
+    prep_pseudobulk_target_celltype) instead — diffing a cell type's
+    knockout prediction against the POPULATION baseline would conflate
+    genuine cross-cell-type expression differences with the knockout's
+    actual effect; diffing against that cell type's own pre-knockout
+    profile isolates the knockout effect the same way Module 9 already
+    does at the population level.
+  - --network overrides the LingerGRN `network` argument to
+    TF_activity.regulon() for mode=="aging_tf_activity" (default: "cell
+    population"). Passing a cell-type name here instead is a real,
+    supported LingerGRN 1.110 code path — confirmed by reading
+    TF_activity.py directly: any value other than "cell population"/
+    "general" is read as `cell_type_specific_trans_regulatory_{network}.
+    txt`, which Module 6 (grn_celltype_specific.py) already writes, one
+    per cell type, into the same --workdir this script already reads.
+
+CAVEAT that applies to EVERY Module 9b check, not just the aging ones,
+worth restating here since it's easy to lose sight of once the plumbing
+works: every held-out/negative-control/aging dataset loaded by this
+script (via bulk_rna_loader.load_rna_only) is BULK RNA-seq, not single-
+cell/multiome — there is no per-cell-type label to subset by on the real
+side of any comparison. Pointing --network or --baseline-tsv at a
+specific cell type changes which MODEL (regulatory network / pre-
+knockout reference) the same bulk sample is scored against, not which
+CELLS from that sample are used — it answers "does this bulk sample look
+consistent with cell type X's regulatory activity / knockout response",
+not "what did cell type X's cells in this sample actually do" (no such
+ground truth exists in this dataset collection). Report results from
+this mode with that distinction stated, not implied.
 """
 import argparse
 import json
@@ -95,6 +133,17 @@ p.add_argument("--output-shift-tsv", default=None,
 p.add_argument("--aging-vector-tsv", default=None,
                help="Only used when check_spec['aging_role']=='support': path to the "
                     "reference ('aging_vector') shift vector written via --output-shift-tsv.")
+p.add_argument("--baseline-tsv", default=None,
+               help="ADDED for Module 9b. Overrides the 'before' reference for "
+                    "mode=='expression_shift' (default: WORKDIR/data/TG_pseudobulk.tsv, "
+                    "population). Pass a cell type's own TG_pseudobulk_{celltype}.tsv for "
+                    "cell-type-resolved validation.")
+p.add_argument("--network", default="cell population",
+               help="ADDED for Module 9b. Overrides the LingerGRN `network` arg to "
+                    "TF_activity.regulon() for mode=='aging_tf_activity' (default: 'cell "
+                    "population'). Pass a cell type name to use Module 6's "
+                    "cell_type_specific_trans_regulatory_{network}.txt instead — a real "
+                    "LingerGRN 1.110 code path, not a population-only special case.")
 args = p.parse_args()
 
 entry = json.loads(args.entry_json)
@@ -138,8 +187,10 @@ if spec["mode"] == "expression_shift":
     )
     real_mean = np.log2(1 + real_mean.clip(lower=0))
 
-    baseline = pd.read_csv(os.path.join(args.workdir, "data", "TG_pseudobulk.tsv"), sep=",", header=0, index_col=0)
+    baseline_path = args.baseline_tsv or os.path.join(args.workdir, "data", "TG_pseudobulk.tsv")
+    baseline = pd.read_csv(baseline_path, sep=",", header=0, index_col=0)
     baseline_mean = np.log2(1 + baseline.mean(axis=1).clip(lower=0))
+    print(f"baseline: {baseline_path}")
 
     common_genes = real_mean.index.intersection(baseline_mean.index)
     real_shift = (real_mean.loc[common_genes] - baseline_mean.loc[common_genes])
@@ -169,7 +220,8 @@ elif spec["mode"] == "aging_tf_activity":
     import LingerGRN.TF_activity as TF_activity
     adata = load_rna_only(entry)
     os.chdir(args.workdir)
-    real_tf_activity = TF_activity.regulon(args.workdir + "/", adata, args.grn_dir, "cell population", args.genome)
+    real_tf_activity = TF_activity.regulon(args.workdir + "/", adata, args.grn_dir, args.network, args.genome)
+    print(f"regulon network: {args.network!r}")
     real_mean = real_tf_activity.mean(axis=1)
 
     # --- baseline: Module 7's role="baseline" mean TF activity ---
