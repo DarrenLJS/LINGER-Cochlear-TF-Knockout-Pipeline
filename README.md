@@ -119,10 +119,11 @@ getting each module from "built" to "run clean," and
 ├── envs/
 │   ├── linger_preproc.yaml           # Modules 1-3 conda env spec
 │   └── linger.yaml                   # Modules 4/6/7/8/8b env spec — reference only, see Requirements
-├── setup_linger.sh                   # one-time: conda envs, mm10 refs, HOMER, LINGER weights/provide_data
-├── download_datasets.sh              # one-time: pulls + auto-extracts all GEO accessions
-├── patch_LL_net_RE_ordering.py       # one-time idempotent patch for a real bug in installed LingerGRN
-├── patch_LL_net_cis_reg_load.py      # one-time idempotent patch for a second real bug in installed LingerGRN
+├── setup_scripts/                    # one-time setup, run before/outside the Snakemake DAG
+│   ├── setup_linger.sh               #   conda envs, mm10 refs, HOMER, LINGER weights/provide_data
+│   ├── download_datasets.sh          #   pulls + auto-extracts all GEO accessions
+│   ├── patch_LL_net_RE_ordering.py   #   idempotent patch for a real bug in installed LingerGRN
+│   └── patch_LL_net_cis_reg_load.py  #   idempotent patch for a second real bug in installed LingerGRN
 ├── other_helper_scripts/             # one-off debugging/verification scripts, not part of the DAG
 │   ├── h5ad_breakdown.py             #   per-cluster DE genes + sample composition (Module 3 review)
 │   ├── h5ad_check.py                 #   spot-checks marker expression for specific clusters
@@ -641,8 +642,8 @@ data:**
 - PyTorch 2.6+'s `weights_only=True` default broke unpickling LINGER's own
   saved models — fixed with a `torch.load` monkeypatch.
 - Two real bugs in the installed `LingerGRN` package's single-celltype
-  `scNN` branches — fixed via the two `patch_LL_net_*.py` scripts at the
-  repo root.
+  `scNN` branches — fixed via the two `patch_LL_net_*.py` scripts in
+  `setup_scripts/`.
 - Manually-authored cell-type labels containing commas/slashes/parentheses
   broke Snakemake's own SGE array-job wildcard parsing — fixed by
   sanitizing `cluster_annotation.tsv`.
