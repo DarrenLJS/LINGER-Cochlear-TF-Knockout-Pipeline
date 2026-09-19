@@ -119,12 +119,34 @@ else:
     # Cell-type (or other substituted) mode: reindex to the population Exp's
     # exact TF row order rather than recomputing a fresh set() intersection —
     # see this script's docstring, CELL-TYPE-RESOLVED MODE, for why.
+    #
+    # FIX 2026-09-18 — CONFIRMED via direct forward-pass test (Pericyte,
+    # gene Mroh2a): leaving missing TFs as NaN after reindex() and letting
+    # them "break the forward pass" (the prior comment/behavior here) does
+    # not raise or crash — it silently poisons every prediction. net is a
+    # plain dense 3-layer MLP (Linear(617->64)->Linear(64->16)->Linear(16->1))
+    # with no masking, so a NaN in ANY of its ~617 input features (per-row
+    # z-score mean/std over a fully-NaN row stays NaN, and NaN propagates
+    # through every downstream matmul) makes the ENTIRE output NaN for
+    # every sample. pandas' DataFrame.to_csv() then writes those NaNs as
+    # empty cells (its default na_rep=""), not the literal text "nan" —
+    # so this was invisible to a text-based check of the output files.
+    # Verified empirically across all 20 cell-type-resolved cell types:
+    # every single sanity-check and knockout predicted_expression.tsv
+    # produced by this script to date was 100.0% NaN (120/120 files,
+    # confirmed via pandas .isna() on the actual outputs, 2026-09-18).
+    #
+    # Same underlying cause and same defensible fix as the RE side below:
+    # a TF absent from a cell type's pseudobulk means "not detected/
+    # expressed in this cell type", which is a legitimate 0, not an
+    # unknown that should be allowed to corrupt the whole forward pass.
+    # Reindex + fill 0, mirroring the RE fix, instead of leaving NaN.
     missing_tfs = [tf for tf in Exp_population.index if tf not in Target.index]
     if missing_tfs:
         print(f"WARNING: {len(missing_tfs)} of {len(Exp_population.index)} population TFs "
-              f"not present in the substituted Target ({target_path}) — these rows will be "
-              f"NaN after reindex and will break the forward pass. Missing: {missing_tfs}")
-    Exp = Target.reindex(Exp_population.index)
+              f"not present in the substituted Target ({target_path}) — filling as 0 "
+              f"(not detected/expressed in this cell type's pseudobulk). Missing: {missing_tfs}")
+    Exp = Target.reindex(Exp_population.index).fillna(0)
     print(f"Cell-type-resolved mode: Exp reindexed to population's {len(Exp_population.index)}-TF "
           f"order from {target_path} ({Exp.shape[1]} pseudo-samples).")
 
@@ -178,10 +200,9 @@ for chrom in sorted(RE_TGlink["chr"].unique()):
         # Reindex + fill 0 instead of a strict .loc[] lookup — a peak absent
         # from this cell type's pseudobulk means "no accessibility signal
         # observed here", i.e. closed chromatin, which IS 0, not unknown.
-        # Mirrors the TF/Exp side's reindex-with-warning pattern above, but
-        # fills 0 rather than NaN since a missing RE has a defensible concrete
-        # value (unlike a missing TF, which the code above deliberately still
-        # lets go to NaN and break — see that comment).
+        # Mirrors the TF/Exp side's reindex-with-warning-and-fill-0 pattern
+        # above (both sides now treat a missing feature the same way: a
+        # defensible 0, not an unknown left to corrupt the forward pass).
         re_series = Opn.reindex(re_list)
         missing_res = re_series.index[re_series.isna().any(axis=1)].tolist()
         if missing_res:
