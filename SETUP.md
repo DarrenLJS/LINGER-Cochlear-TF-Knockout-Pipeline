@@ -237,8 +237,12 @@ Always dry-run before submitting anything:
 ```bash
 cd /exports/eddie/scratch/<user>/linger_pipeline/code
 conda activate snakemake_eddie
-snakemake -n --cores 4 --use-conda --conda-frontend conda
+snakemake --profile profiles/eddie --use-conda --conda-frontend conda \
+    --rerun-incomplete --keep-going --latency-wait 60 -n
 ```
+
+The dry run uses the same profile and flags as the real run, so it checks
+the same configuration.
 
 Check that the job count and target list look right (about 21 jobs for four
 samples through Module 3). An error at this stage is a path or config
@@ -263,6 +267,15 @@ Detach with `Ctrl-b d`. Monitor with `qstat` and:
 
 ```bash
 tail -f /exports/eddie/scratch/<user>/linger_pipeline/preprocessed/snakemake_run.log
+```
+
+When `rule all` finishes, build the per-sample QC summary. It is not part of
+`rule all`, so it needs its own command:
+
+```bash
+snakemake --profile profiles/eddie --use-conda --conda-frontend conda \
+    --rerun-incomplete --keep-going --latency-wait 60 \
+    /exports/eddie/scratch/<user>/linger_pipeline/preprocessed/module1_summary.csv
 ```
 
 Per-rule logs are written to `<scratch>/logs/`, as declared in each rule's
@@ -331,14 +344,15 @@ recreating it. `envs/linger.yaml` is kept for documentation only.
 **Run Module 4:**
 
 ```bash
-snakemake --profile profiles/eddie --use-conda \
+snakemake --profile profiles/eddie --use-conda --conda-frontend conda \
+    --rerun-incomplete --keep-going --latency-wait 60 \
     <scratch>/module4_linger_init/tss_redist.done \
     <scratch>/module4_linger_init/MotifTarget.bed
 ```
 
-`--use-conda` alone is enough from Module 4 onward: because the env is
-externally managed, `--conda-frontend conda` and `--conda-create-envs-only`
-are not needed (they are harmless if included, as in the README commands).
+Because the `LINGER` env is externally managed, `--conda-frontend conda` has
+no effect from Module 4 onward; it is kept so every command uses the same
+flags.
 
 Module 6 (`module6_all`) becomes runnable once `labeled.h5ad` exists
 (step 12), Module 4 has completed, and the LingerGRN patches are applied

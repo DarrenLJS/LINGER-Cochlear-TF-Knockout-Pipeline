@@ -190,40 +190,102 @@ Other keys worth knowing:
 ## Usage
 
 Run all commands from the repository root (`<linger_pipeline>/code`) with
-`snakemake_eddie` activated. `$SCRATCH` is the `scratch` path from the config.
-First-time installation (environments, downloads, HOMER, dry run) is covered
-step by step in [SETUP.md](SETUP.md).
-
-For readability, the commands below use one shell variable for the standard
-flags:
-
-```bash
-SMK="snakemake --profile profiles/eddie --use-conda --conda-frontend conda \
-     --rerun-incomplete --keep-going --latency-wait 60"
-```
+`snakemake_eddie` activated. First-time installation (environments,
+downloads, HOMER, dry run) is covered step by step in [SETUP.md](SETUP.md).
 
 Long runs should be started inside `tmux` (`tmux new-session -s linger_run`),
-with output redirected to a log, for example
-`$SMK > $SCRATCH/snakemake_run.log 2>&1 &`. Monitor with `qstat` and
-`tail -f $SCRATCH/snakemake_run.log`.
+with output redirected to a log (append
+`> $SCRATCH/snakemake_run.log 2>&1 &` to the command). Monitor with `qstat`
+and `tail -f $SCRATCH/snakemake_run.log`.
 
 ### Run order
 
-| Step | Module | Command | Check before continuing |
-|---|---|---|---|
-| 1 | Dry run | `$SMK -n` | Job list and targets look right |
-| 2 | 1–2 · QC, consensus peaks | `$SMK` (`rule all`) | `module1_summary.csv`, `qc_sanity_checks/sanity_summary.csv` |
-| 3 | 3 · Integration | `$SMK $SCRATCH/module3_integration/{cluster_marker_scores.csv,cluster_umap.png,cluster_template.tsv}` | Manual annotation — see below |
-| 4 | 3 · Apply labels | `$SMK $SCRATCH/module3_integration/labeled.h5ad` | — |
-| 5 | 4 · LINGER init | `$SMK $SCRATCH/module4_linger_init/tss_redist.done $SCRATCH/module4_linger_init/MotifTarget.bed` | — |
-| 6 | 6 · GRN inference | `$SMK module6_all` | One `.done` marker per cell type |
-| 7 | 7 · Bulk TF activity | `$SMK module7_all` | `tf_activity_summary.tsv` |
-| 8 | 8 · Perturbation | `$SMK $SCRATCH/module8_perturbation/_sanity_check_baseline_predicted.tsv`, then `$SMK module8_all` | Sanity check — see below |
-| 9 | 8b · Perturbation per cell type | `$SMK module8b_all` | Per-cell-type sanity logs |
-| 10 | 9 · Validation | `$SMK module9_all` | `validation_report.tsv` |
-| 11 | 9b · Validation per cell type | `$SMK module9b_aggregate` | `sanity_rho` column per scope |
-| 12 | 10 · GRN benchmarking | `$SMK benchmark_grn_edges` | Independent of Modules 7–9 |
-| 13 | 11 · CAPS score | `$SMK module11_all` | Needs Module 9b; independent of Module 10 |
+Set `SCRATCH` to the `scratch` path from the config, and dry-run first:
+
+```bash
+SCRATCH=/exports/eddie/scratch/<user>/linger_pipeline/preprocessed
+
+snakemake --profile profiles/eddie --use-conda --conda-frontend conda \
+    --rerun-incomplete --keep-going --latency-wait 60 -n
+```
+
+Then run the modules in order. Stop at each manual checkpoint
+(see [Manual checkpoints](#manual-checkpoints)) before continuing.
+
+```bash
+# --- Module 1 & 2 (rule all covers both, plus QC sanity checks) ---
+snakemake --profile profiles/eddie --use-conda --conda-frontend conda \
+    --rerun-incomplete --keep-going --latency-wait 60
+
+# module1_summary.csv is not part of rule all; build it explicitly
+snakemake --profile profiles/eddie --use-conda --conda-frontend conda \
+    --rerun-incomplete --keep-going --latency-wait 60 \
+    $SCRATCH/module1_summary.csv
+
+# --- Module 3 — integration, then manual annotation, then labeled.h5ad ---
+snakemake --profile profiles/eddie --use-conda --conda-frontend conda \
+    --rerun-incomplete --keep-going --latency-wait 60 \
+    $SCRATCH/module3_integration/cluster_marker_scores.csv \
+    $SCRATCH/module3_integration/cluster_umap.png \
+    $SCRATCH/module3_integration/cluster_template.tsv
+
+# -> fill in the cell_type column, save to the cluster_annotation_tsv path, then:
+snakemake --profile profiles/eddie --use-conda --conda-frontend conda \
+    --rerun-incomplete --keep-going --latency-wait 60 \
+    $SCRATCH/module3_integration/labeled.h5ad
+
+# --- Module 4 — pseudobulk, TSS redistribution, motif scan ---
+snakemake --profile profiles/eddie --use-conda --conda-frontend conda \
+    --rerun-incomplete --keep-going --latency-wait 60 \
+    $SCRATCH/module4_linger_init/tss_redist.done \
+    $SCRATCH/module4_linger_init/MotifTarget.bed
+
+# --- Module 6 — GRN inference (population + per cell type) ---
+snakemake --profile profiles/eddie --use-conda --conda-frontend conda \
+    --rerun-incomplete --keep-going --latency-wait 60 module6_all
+
+# --- Module 7 — bulk TF activity ---
+snakemake --profile profiles/eddie --use-conda --conda-frontend conda \
+    --rerun-incomplete --keep-going --latency-wait 60 module7_all
+
+# --- Module 8 — perturbation: sanity check first, read the log, then run ---
+snakemake --profile profiles/eddie --use-conda --conda-frontend conda \
+    --rerun-incomplete --keep-going --latency-wait 60 \
+    $SCRATCH/module8_perturbation/_sanity_check_baseline_predicted.tsv
+
+tail -30 $SCRATCH/logs/08b_sanity_check.log
+
+snakemake --profile profiles/eddie --use-conda --conda-frontend conda \
+    --rerun-incomplete --keep-going --latency-wait 60 module8_all
+
+# --- Module 8b — cell-type-resolved perturbation: read each cell type's sanity log first ---
+snakemake --profile profiles/eddie --use-conda --conda-frontend conda \
+    --rerun-incomplete --keep-going --latency-wait 60 module8b_all
+
+# -> read $SCRATCH/logs/08b_sanity_check_{celltype}.log per cell type before trusting its output
+
+# --- Module 9 — validation ---
+snakemake --profile profiles/eddie --use-conda --conda-frontend conda \
+    --rerun-incomplete --keep-going --latency-wait 60 module9_all
+
+# --- Module 9b — cell-type-resolved validation (mirrors Module 9's 5 checks
+# per cell type; population and cell-type results are equally weighted,
+# see 09b_validation_celltype.smk header) ---
+snakemake --profile profiles/eddie --use-conda --conda-frontend conda \
+    --rerun-incomplete --keep-going --latency-wait 60 module9b_aggregate
+
+# -> read validation_report_combined.tsv's sanity_rho column per scope before
+# trusting any cell type's checks
+
+# --- Module 10 — GRN benchmarking (no dependency on Modules 7–9) ---
+snakemake --profile profiles/eddie --use-conda --conda-frontend conda \
+    --rerun-incomplete --keep-going --latency-wait 60 benchmark_grn_edges
+
+# --- Module 11 — CAPS score (needs module9b_aggregate's
+# validation_report_combined.tsv for confidence_weight; does not depend on Module 10) ---
+snakemake --profile profiles/eddie --use-conda --conda-frontend conda \
+    --rerun-incomplete --keep-going --latency-wait 60 module11_all
+```
 
 If a stage needs re-running after a fix, delete its `.done` marker first
 (for example `population_training.done` for Module 6).
@@ -234,8 +296,9 @@ If a stage needs re-running after a fix, delete its `.done` marker first
 automatic; the cell-type call is manual by design. Review
 `cluster_umap.png` and `cluster_marker_scores.csv` (mean expression of
 `Myo7a`, `Pou4f3`, `Gfi1`, `Slc26a5`, `Sox2`, `Hes1` per cluster), copy
-`cluster_template.tsv` to `cluster_annotation.tsv`, fill in the `cell_type`
-column for every `leiden` row, then run step 4.
+`cluster_template.tsv` to the `integration.cluster_annotation_tsv` path
+(default `cluster_annotation.tsv`), fill in the `cell_type` column for every
+`leiden` row, then build `labeled.h5ad`.
 
 **Module 8 — read the sanity check before trusting any knockout output.**
 ```bash
@@ -278,7 +341,7 @@ rm -rf $SCRATCH/qc_sanity_checks $SCRATCH/module3_integration $SCRATCH/module4_l
 rm -f  $SCRATCH/module1_summary.csv
 ```
 
-Then repeat the run order from step 2.
+Then repeat the run order from Module 1 & 2.
 
 ---
 
