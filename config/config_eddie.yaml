@@ -92,41 +92,125 @@ extra_bulk_rna_inputs:
     dataset: GSE157398
     rna_prefix: "{multiome_root}/GSE157398/GSM4764089_Cochlear_scRNAseq_Base_"
     region: Base
-  - sample_id: GSE150002_P1SC_reprogramming
+  # FIXED 2026-09-26 (Bug Class A) — this single entry loaded all 14 real
+  # sibling files (5 distinct treatment/timepoint conditions: DMSO_24h,
+  # DAPT_24h, control_48h, nonpermissive_48h, permissive_48h) into one
+  # AnnData, which linger_tf_activity.py then collapses to ONE row via
+  # score.mean(axis=1) — blending 5 real conditions into a single TF
+  # activity value. Split into 5 entries, one per real condition,
+  # glob_pattern-restricted to that condition's own sibling files only
+  # (confirmed real filenames via config_multiplicity check).
+  - sample_id: GSE150002_DMSO_24h
     dataset: GSE150002
     path: "{multiome_root}/../04_bulk_rnaseq/GSE150002_P1SC_reprogramming"
-    # Confirmed real RSEM genes.results shape, same as GSE149254 (14 sibling files).
     format: per_sample_merge
-    glob_pattern: "*.genes.results.txt.gz"
+    glob_pattern: "*_P1SC_DMSO_24h_RNAseq_*.genes.results.txt.gz"
     value_column: expected_count
     id_column: gene_id
     sample_name_regex: "^GSM\\d+_(.+)\\.genes\\.results\\.txt\\.gz$"
-  - sample_id: GSE111603
+  - sample_id: GSE150002_DAPT_24h
+    dataset: GSE150002
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE150002_P1SC_reprogramming"
+    format: per_sample_merge
+    glob_pattern: "*_P1SC_DAPT_24h_RNAseq_*.genes.results.txt.gz"
+    value_column: expected_count
+    id_column: gene_id
+    sample_name_regex: "^GSM\\d+_(.+)\\.genes\\.results\\.txt\\.gz$"
+  - sample_id: GSE150002_control_48h
+    dataset: GSE150002
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE150002_P1SC_reprogramming"
+    format: per_sample_merge
+    glob_pattern: "*_P1SC_control_48h_RNAseq_*.genes.results.txt.gz"
+    value_column: expected_count
+    id_column: gene_id
+    sample_name_regex: "^GSM\\d+_(.+)\\.genes\\.results\\.txt\\.gz$"
+  - sample_id: GSE150002_nonpermissive_48h
+    dataset: GSE150002
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE150002_P1SC_reprogramming"
+    format: per_sample_merge
+    glob_pattern: "*_P1SC_nonpermissive_48h_RNAseq_*.genes.results.txt.gz"
+    value_column: expected_count
+    id_column: gene_id
+    sample_name_regex: "^GSM\\d+_(.+)\\.genes\\.results\\.txt\\.gz$"
+  - sample_id: GSE150002_permissive_48h
+    dataset: GSE150002
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE150002_P1SC_reprogramming"
+    format: per_sample_merge
+    # "nonpermissive_48h" does NOT match this pattern — the substring
+    # "_P1SC_permissive_" is not present inside "_P1SC_nonpermissive_",
+    # confirmed by direct string check before relying on it.
+    glob_pattern: "*_P1SC_permissive_48h_RNAseq_*.genes.results.txt.gz"
+    value_column: expected_count
+    id_column: gene_id
+    sample_name_regex: "^GSM\\d+_(.+)\\.genes\\.results\\.txt\\.gz$"
+  # FIXED 2026-09-26 (Bug Class A) — real columns confirmed: R4con1/2/4/5,
+  # R4FK2/3/4/5, WTcon1-4, WTFK1/2/4/7 (16 total, 4 genotype x condition
+  # groups of 4 replicates each) all loaded as one matrix, blended into one
+  # mean. Split via sample_column_regex, one entry per real group.
+  - sample_id: GSE111603_R4con
     dataset: GSE111603
     path: "{multiome_root}/../04_bulk_rnaseq/GSE111603"
-  - sample_id: GSE111604
+    sample_column_regex: "^R4con\\d+_S\\d+$"
+  - sample_id: GSE111603_R4FK
+    dataset: GSE111603
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE111603"
+    sample_column_regex: "^R4FK\\d+_S\\d+$"
+  - sample_id: GSE111603_WTcon
+    dataset: GSE111603
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE111603"
+    sample_column_regex: "^WTcon\\d+_S\\d+$"
+  - sample_id: GSE111603_WTFK
+    dataset: GSE111603
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE111603"
+    sample_column_regex: "^WTFK\\d+_S\\d+$"
+  # FIXED 2026-09-26 (Bug Class A) — Utricle_KO (4 reps) vs Utricle_WT (3
+  # reps) were one blended mean; split by genotype.
+  - sample_id: GSE111604_KO
     dataset: GSE111604
     path: "{multiome_root}/../04_bulk_rnaseq/GSE111604"
-  - sample_id: GSE113719
+    sample_column_regex: "^Utricle_KO_\\d+$"
+  - sample_id: GSE111604_WT
+    dataset: GSE111604
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE111604"
+    sample_column_regex: "^Utricle_WT_\\d+$"
+  # FIXED 2026-09-26 (Bug Class A) — P1_T/P1_U/P4_T/P4_U (age x Wnt-treatment,
+  # 3+3+2+3 real reps) were one blended mean; split into the 4 real groups.
+  # symbol_column (already in the original single entry) kept on every split.
+  - sample_id: GSE113719_P1_T
     dataset: GSE113719
     path: "{multiome_root}/../04_bulk_rnaseq/GSE113719"
-    # Confirmed header: gene,P1_T_1,...,P4_U_3,mgi_symbol — `gene` (index_col=0)
-    # is Ensembl (confirmed real data row: ENSMUSG00000000001), NOT a symbol,
-    # despite previously being bucketed as "Category A, clean". symbol_column
-    # redirects var_names to the real mgi_symbol column instead.
+    sample_column_regex: "^P1_T_\\d+$"
     symbol_column: mgi_symbol
-  - sample_id: GSE116702
+  - sample_id: GSE113719_P1_U
+    dataset: GSE113719
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE113719"
+    sample_column_regex: "^P1_U_\\d+$"
+    symbol_column: mgi_symbol
+  - sample_id: GSE113719_P4_T
+    dataset: GSE113719
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE113719"
+    sample_column_regex: "^P4_T_\\d+$"
+    symbol_column: mgi_symbol
+  - sample_id: GSE113719_P4_U
+    dataset: GSE113719
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE113719"
+    sample_column_regex: "^P4_U_\\d+$"
+    symbol_column: mgi_symbol
+  # FIXED 2026-09-26 (Bug Class A) — wild-type (E1/E2) vs homozygous mutant
+  # (E3/E4) were one blended mean (per_sample_merge merging all 4 sibling
+  # files into a single AnnData); split by genotype via glob_pattern.
+  - sample_id: GSE116702_wild_type
     dataset: GSE116702
     path: "{multiome_root}/../04_bulk_rnaseq/GSE116702"
-    # Discovered during Module 7 regression verification (not the original
-    # 24-failure investigation — this "succeeded" under the old loader by
-    # silently building a 1-column matrix). Confirmed real shape: 4 sibling
-    # per-sample files, header has ONE field ("<sample>.accepted_hits")
-    # while data rows have TWO — the gene-id column has no header name at
-    # all, not a bug, just an unlabeled first column. index_col=0 handles
-    # this correctly (id_column omitted = implicit/unlabeled id column).
     format: per_sample_merge
-    glob_pattern: "GSM*.txt.gz"
+    glob_pattern: "GSM*wild.type.txt.gz"
+    value_column_index: 0
+    sample_name_regex: "_(E\\d+.*)\\.txt\\.gz$"
+  - sample_id: GSE116702_homozygous_mutant
+    dataset: GSE116702
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE116702"
+    format: per_sample_merge
+    glob_pattern: "GSM*homozygous_mutant.txt.gz"
     value_column_index: 0
     sample_name_regex: "_(E\\d+.*)\\.txt\\.gz$"
   # GSE120462 split into 2 entries 2026-09-08 — confirmed real data is
@@ -147,86 +231,262 @@ extra_bulk_rna_inputs:
     format: cellranger_h5
     glob_patterns: ["GSM3401093_Ikzf2_raw_gene_bc_matrices_h5.h5"]
     h5_genome_key: mm10plus2
-  - sample_id: GSE129533
+  # FIXED 2026-09-26 (Bug Class A) — FPKM-original vs FPKM-new (a 2-arm
+  # comparison, not 2 replicates of one condition) were one blended mean.
+  - sample_id: GSE129533_original
     dataset: GSE129533
     path: "{multiome_root}/../04_bulk_rnaseq/GSE129533"
-    # Confirmed via header check (openpyxl): only usable file is .xlsx, real
-    # columns are ['gene','locus','FPKM-original','FPKM-new','log2(...)','p_value']
-    # — a 2-condition comparison (no per-replicate samples), not a normal
-    # counts matrix. Only 2 real sample-like columns exist for this dataset.
     format: excel
-    sample_column_regex: "^FPKM-(original|new)$"
-  - sample_id: GSE139145
+    sample_column_regex: "^FPKM-original$"
+  - sample_id: GSE129533_new
+    dataset: GSE129533
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE129533"
+    format: excel
+    sample_column_regex: "^FPKM-new$"
+  # FIXED 2026-09-26 (Bug Class A) — 2mo-wt (3 reps) vs 2mo-het (3 reps)
+  # were one blended mean; split by genotype via glob_pattern.
+  - sample_id: GSE139145_wt
     dataset: GSE139145
     path: "{multiome_root}/../04_bulk_rnaseq/GSE139145"
-    # Confirmed real per-sample files: gene_id, length, <sample>, <sample>_FPKM,
-    # GeneSymbol, KO, GO — value column's NAME is the sample name itself
-    # (varies per file), but its POSITION (index 2) is consistent, hence
-    # value_column_index rather than value_column.
     format: per_sample_merge
-    glob_pattern: "GSM*.txt.gz"
+    glob_pattern: "GSM*_2mo-wt-*.txt.gz"
     value_column_index: 2
     id_column: gene_id
     symbol_column: GeneSymbol
     sample_name_regex: "_(2mo-(?:wt|het)-\\d+)\\.txt\\.gz$"
-  - sample_id: GSE149254
+  - sample_id: GSE139145_het
+    dataset: GSE139145
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE139145"
+    format: per_sample_merge
+    glob_pattern: "GSM*_2mo-het-*.txt.gz"
+    value_column_index: 2
+    id_column: gene_id
+    symbol_column: GeneSymbol
+    sample_name_regex: "_(2mo-(?:wt|het)-\\d+)\\.txt\\.gz$"
+  # FIXED 2026-09-26 (Bug Class A) — E12.0 (2 reps) vs E13.5 (2 reps) were
+  # one blended mean across two real developmental ages; split by age.
+  - sample_id: GSE149254_E12_0
     dataset: GSE149254
     path: "{multiome_root}/../04_bulk_rnaseq/GSE149254"
-    # Confirmed real RSEM genes.results shape: gene_id, transcript_id(s),
-    # length, effective_length, expected_count, TPM, FPKM.
     format: per_sample_merge
-    glob_pattern: "*.genes.results.txt.gz"
+    glob_pattern: "*_E12.0PG_RNAseq_*.genes.results.txt.gz"
     value_column: expected_count
     id_column: gene_id
     sample_name_regex: "^GSM\\d+_(.+)\\.genes\\.results\\.txt\\.gz$"
-  - sample_id: GSE149257
+  - sample_id: GSE149254_E13_5
+    dataset: GSE149254
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE149254"
+    format: per_sample_merge
+    glob_pattern: "*_E13.5PG_RNAseq_*.genes.results.txt.gz"
+    value_column: expected_count
+    id_column: gene_id
+    sample_name_regex: "^GSM\\d+_(.+)\\.genes\\.results\\.txt\\.gz$"
+  # FIXED 2026-09-26 (Bug Class A) — 8 unrelated cell populations (hair
+  # cells, non-hair cells, MEFs, induced hair cells, and others across
+  # developmental stages) were one blended mean (22 real files total);
+  # split into the 8 real populations via glob_pattern.
+  - sample_id: GSE149257_P1HC
     dataset: GSE149257
     path: "{multiome_root}/../04_bulk_rnaseq/GSE149257"
-    # Confirmed real RSEM ISOFORM-level shape: transcript_id, gene_id,
-    # length, effective_length, expected_count, TPM, FPKM, IsoPct — needs
-    # gene-level rollup (sum of isoform expected_count per gene_id), unlike
-    # the gene-level RSEM datasets above.
     format: per_sample_merge
-    glob_pattern: "*.isoforms.results.tsv.gz"
+    glob_pattern: "*_RNA_P1HC_Rep*.isoforms.results.tsv.gz"
     value_column: expected_count
     id_column: transcript_id
     rollup: sum_by_gene
     rollup_id_column: gene_id
     sample_name_regex: "^GSM\\d+_(.+)\\.isoforms\\.results\\.tsv\\.gz$"
-  - sample_id: GSE163798
+  - sample_id: GSE149257_P1NonHC
+    dataset: GSE149257
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE149257"
+    format: per_sample_merge
+    glob_pattern: "*_RNA_P1NonHC_Rep*.isoforms.results.tsv.gz"
+    value_column: expected_count
+    id_column: transcript_id
+    rollup: sum_by_gene
+    rollup_id_column: gene_id
+    sample_name_regex: "^GSM\\d+_(.+)\\.isoforms\\.results\\.tsv\\.gz$"
+  - sample_id: GSE149257_D14MEF
+    dataset: GSE149257
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE149257"
+    format: per_sample_merge
+    glob_pattern: "*_RNA_D14MEF_Rep*.isoforms.results.tsv.gz"
+    value_column: expected_count
+    id_column: transcript_id
+    rollup: sum_by_gene
+    rollup_id_column: gene_id
+    sample_name_regex: "^GSM\\d+_(.+)\\.isoforms\\.results\\.tsv\\.gz$"
+  - sample_id: GSE149257_D14iHC
+    dataset: GSE149257
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE149257"
+    format: per_sample_merge
+    glob_pattern: "*_RNA_D14iHC_Rep*.isoforms.results.tsv.gz"
+    value_column: expected_count
+    id_column: transcript_id
+    rollup: sum_by_gene
+    rollup_id_column: gene_id
+    sample_name_regex: "^GSM\\d+_(.+)\\.isoforms\\.results\\.tsv\\.gz$"
+  - sample_id: GSE149257_P1MC
+    dataset: GSE149257
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE149257"
+    format: per_sample_merge
+    glob_pattern: "*_RNA_P1MC_Rep*.isoforms.results.tsv.gz"
+    value_column: expected_count
+    id_column: transcript_id
+    rollup: sum_by_gene
+    rollup_id_column: gene_id
+    sample_name_regex: "^GSM\\d+_(.+)\\.isoforms\\.results\\.tsv\\.gz$"
+  - sample_id: GSE149257_P1CGP
+    dataset: GSE149257
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE149257"
+    format: per_sample_merge
+    glob_pattern: "*_RNA_P1CGP_Rep*.isoforms.results.tsv.gz"
+    value_column: expected_count
+    id_column: transcript_id
+    rollup: sum_by_gene
+    rollup_id_column: gene_id
+    sample_name_regex: "^GSM\\d+_(.+)\\.isoforms\\.results\\.tsv\\.gz$"
+  - sample_id: GSE149257_AdultGUT
+    dataset: GSE149257
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE149257"
+    format: per_sample_merge
+    glob_pattern: "*_RNA_AdultGUT_Rep*.isoforms.results.tsv.gz"
+    value_column: expected_count
+    id_column: transcript_id
+    rollup: sum_by_gene
+    rollup_id_column: gene_id
+    sample_name_regex: "^GSM\\d+_(.+)\\.isoforms\\.results\\.tsv\\.gz$"
+  - sample_id: GSE149257_P1uHC
+    dataset: GSE149257
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE149257"
+    format: per_sample_merge
+    glob_pattern: "*_RNA_P1uHC_Rep*.isoforms.results.tsv.gz"
+    value_column: expected_count
+    id_column: transcript_id
+    rollup: sum_by_gene
+    rollup_id_column: gene_id
+    sample_name_regex: "^GSM\\d+_(.+)\\.isoforms\\.results\\.tsv\\.gz$"
+  # FIXED 2026-09-26 (round 2, run failure) — the original 2-entry version
+  # of this fix (CH_HC_AD vs HH_HC_AD) was built from a load that silently
+  # picked ONE of 4 real sibling files (GSE163798_HH_Vs_CH.txt.gz — there
+  # is no single combined matrix for this dataset at all). Confirmed via
+  # direct header inspection of all 4 files:
+  #   HH_Vs_CH.txt.gz: HH_HC_AD005/007/008_Counts, CH_HC_AD010/011_Counts
+  #   KH_Vs_CH.txt.gz: KH_HC_AD001/003/004_Counts, CH_HC_AD010/011_Counts (same 2 CH samples, repeated)
+  #   SH_vs_SC.txt.gz: SH_SGN_AD005/006/007_Counts, SC_SGN_AD001/002_Counts
+  #   SK_Vs_SC.txt.gz: SK_SGN_AD008/009/010_Counts, SC_SGN_AD001/002_Counts (same 2 SC samples, repeated)
+  # 6 real groups total, not 2: 3 hair-cell genotypes (HH/KH/CH_HC_AD) and
+  # 3 spiral-ganglion-neuron genotypes (SH/SK/SC_SGN_AD). CH_HC_AD and
+  # SC_SGN_AD each appear identically in two sibling files (a shared
+  # control group re-used across two pairwise-comparison exports, not two
+  # different real datasets) — glob_pattern below picks either source file
+  # for those two groups' data since it's the same numbers either way, and
+  # each other group is sourced from its one real file.
+  - sample_id: GSE163798_HH_HC_AD
     dataset: GSE163798
     path: "{multiome_root}/../04_bulk_rnaseq/GSE163798"
-  - sample_id: GSE193158
+    glob_pattern: "GSE163798_HH_Vs_CH.txt.gz"
+    sample_column_regex: "^HH_HC_AD\\d+_Counts$"
+  - sample_id: GSE163798_KH_HC_AD
+    dataset: GSE163798
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE163798"
+    glob_pattern: "GSE163798_KH_Vs_CH.txt.gz"
+    sample_column_regex: "^KH_HC_AD\\d+_Counts$"
+  - sample_id: GSE163798_CH_HC_AD
+    dataset: GSE163798
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE163798"
+    glob_pattern: "GSE163798_HH_Vs_CH.txt.gz"
+    sample_column_regex: "^CH_HC_AD\\d+_Counts$"
+  - sample_id: GSE163798_SH_SGN_AD
+    dataset: GSE163798
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE163798"
+    glob_pattern: "GSE163798_SH_vs_SC.txt.gz"
+    sample_column_regex: "^SH_SGN_AD\\d+_Counts$"
+  - sample_id: GSE163798_SK_SGN_AD
+    dataset: GSE163798
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE163798"
+    glob_pattern: "GSE163798_SK_Vs_SC.txt.gz"
+    sample_column_regex: "^SK_SGN_AD\\d+_Counts$"
+  - sample_id: GSE163798_SC_SGN_AD
+    dataset: GSE163798
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE163798"
+    glob_pattern: "GSE163798_SH_vs_SC.txt.gz"
+    sample_column_regex: "^SC_SGN_AD\\d+_Counts$"
+  # FIXED 2026-09-26 (Bug Class A) — 12 individual mice tagged -ctr/-mut
+  # (one genuinely irregular label, "161-cr" instead of "161-ctr", confirmed
+  # real not a typo introduced here) were one blended mean; split by
+  # genotype tag.
+  - sample_id: GSE193158_ctr
     dataset: GSE193158
     path: "{multiome_root}/../04_bulk_rnaseq/GSE193158"
-  - sample_id: GSE198167
+    sample_column_regex: "^\\d+-c(?:tr|r)$"
+  - sample_id: GSE193158_mut
+    dataset: GSE193158
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE193158"
+    sample_column_regex: "^\\d+-mut$"
+  # FIXED 2026-09-26 (Bug Class A) — WT (4 reps) vs Mut (4 reps) were one
+  # blended mean; split by genotype via glob_pattern.
+  - sample_id: GSE198167_WT
     dataset: GSE198167
     path: "{multiome_root}/../04_bulk_rnaseq/GSE198167"
-    # Discovered during Module 7 regression verification. Confirmed real
-    # shape: 8 sibling per-sample files, NO header line at all (numeric
-    # gene ids, e.g. "37135\t260") — pandas' default header=0 was silently
-    # consuming the first data row as a header, which is exactly what
-    # produced the misleading "kept=['260']" error before this was
-    # inspected directly. header: false forces correct headerless parsing.
     format: per_sample_merge
-    glob_pattern: "GSM*.txt.gz"
+    glob_pattern: "GSM*_WT*.txt.gz"
     value_column_index: 0
     header: false
     sample_name_regex: "_((?:WT|Mut)\\d+(?:-\\d+)?)\\.txt\\.gz$"
-  - sample_id: GSE203228
+  - sample_id: GSE198167_Mut
+    dataset: GSE198167
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE198167"
+    format: per_sample_merge
+    glob_pattern: "GSM*_Mut*.txt.gz"
+    value_column_index: 0
+    header: false
+    sample_name_regex: "_((?:WT|Mut)\\d+(?:-\\d+)?)\\.txt\\.gz$"
+  # FIXED 2026-09-26 (Bug Class A) — Count-Con/Count-Fst (treatment) each
+  # further split across 3 anatomical regions (B/M/A) x 3 reps were one
+  # blended mean across 18 real columns; split into the 6 real
+  # condition x region groups (region kept separate rather than pooled,
+  # since it's its own real biological covariate, not a replicate axis).
+  - sample_id: GSE203228_Con_B
     dataset: GSE203228
     path: "{multiome_root}/../04_bulk_rnaseq/GSE203228"
-    # Confirmed header has Count-*/FPKM-*/avgFPKM-* triplicated per sample
-    # plus geneID/geneSymbol — blanket numeric-coercion would wrongly keep
-    # FPKM/avgFPKM as fake extra "samples". Raw Count- columns chosen as
-    # the simplest single real-sample-column set (see README Module 7
-    # design notes on why counts-vs-FPKM barely matters to regulon()'s own
-    # internal normalization — this isn't a unit-correctness requirement).
-    sample_column_regex: "^Count-"
+    sample_column_regex: "^Count-Con-B-\\d+$"
     symbol_column: geneSymbol
-  - sample_id: GSE213784
+  - sample_id: GSE203228_Con_M
+    dataset: GSE203228
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE203228"
+    sample_column_regex: "^Count-Con-M-\\d+$"
+    symbol_column: geneSymbol
+  - sample_id: GSE203228_Con_A
+    dataset: GSE203228
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE203228"
+    sample_column_regex: "^Count-Con-A-\\d+$"
+    symbol_column: geneSymbol
+  - sample_id: GSE203228_Fst_B
+    dataset: GSE203228
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE203228"
+    sample_column_regex: "^Count-Fst-B-\\d+$"
+    symbol_column: geneSymbol
+  - sample_id: GSE203228_Fst_M
+    dataset: GSE203228
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE203228"
+    sample_column_regex: "^Count-Fst-M-\\d+$"
+    symbol_column: geneSymbol
+  - sample_id: GSE203228_Fst_A
+    dataset: GSE203228
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE203228"
+    sample_column_regex: "^Count-Fst-A-\\d+$"
+    symbol_column: geneSymbol
+  # FIXED 2026-09-26 (Bug Class A) — contro (3 reps, dataset's own real
+  # column spelling, not a typo introduced here) vs neomycin (3 reps) were
+  # one blended mean; split by treatment.
+  - sample_id: GSE213784_control
     dataset: GSE213784
     path: "{multiome_root}/../04_bulk_rnaseq/GSE213784"
+    sample_column_regex: "^contro_\\d+$"
+  - sample_id: GSE213784_neomycin
+    dataset: GSE213784
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE213784"
+    sample_column_regex: "^neomycin_\\d+$"
   - sample_id: GSE239361
     dataset: GSE239361
     path: "{multiome_root}/../04_bulk_rnaseq/GSE239361"
@@ -240,51 +500,91 @@ extra_bulk_rna_inputs:
     # gene_id (Ensembl), producing zero overlap with trans_reg.index.
     exclude_columns: [entrezgene_id]
     symbol_column: external_gene_name
-  - sample_id: GSE240605
+  # FIXED 2026-09-26 (Bug Class A) — Shaker_Het (3 reps) vs Shaker_Hom (4
+  # reps) were one blended mean; split by genotype.
+  # FIXED 2026-09-26 (round 2, run failure) — the real column is
+  # "Shaker_het_R<n>" (lowercase "het"; the dataset's own naming is
+  # inconsistent — "Hom" is capitalized, "het" is not). The first version
+  # of this regex used "Shaker_Het_R" (capital H) to match Hom's style,
+  # which matched 0 real columns and crashed linger_tf_activity_one at
+  # runtime (confirmed via the job's actual traceback — GSE240605_Hom, with
+  # the correct case, ran fine in the same batch).
+  - sample_id: GSE240605_Het
     dataset: GSE240605
     path: "{multiome_root}/../04_bulk_rnaseq/GSE240605"
-  - sample_id: GSE242321
+    sample_column_regex: "^Shaker_het_R\\d+$"
+  - sample_id: GSE240605_Hom
+    dataset: GSE240605
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE240605"
+    sample_column_regex: "^Shaker_Hom_R\\d+$"
+  # FIXED 2026-09-26 (Bug Class A) — this entry's `files:` list already
+  # named the 2 real condition-level files (Atf6-fpkm.txt.gz / WT-fpkm.txt.gz)
+  # individually, but multi_file_merge column-concatenates ALL of them into
+  # ONE AnnData before Module 7 ever sees it — merging ATF6-KO and WT into
+  # one blended mean, same bug as every other split above just reached via
+  # multi_file_merge instead of a single wide matrix. Split into 2 entries,
+  # each a multi_file_merge with only its own single file in `files:` (this
+  # reuses the exact same, already-verified per-file column selection —
+  # no new code path, just one file per entry instead of two).
+  - sample_id: GSE242321_ATF6KO
     dataset: GSE242321
     path: "{multiome_root}/../04_bulk_rnaseq/GSE242321"
-    # Confirmed real data is 2 condition-level files (Atf6-fpkm.txt.gz,
-    # WT-fpkm.txt.gz), not replicates of one condition — needs column-wise
-    # merge. Atf6-fpkm.txt.gz's header confirmed directly (st_gene_id,
-    # gene_id, gene_symbol, fpkm_ATF6KO1..6); WT-fpkm.txt.gz's exact header
-    # was NOT independently confirmed — "^fpkm_" is inferred from the
-    # sibling file's naming convention, not verified. Check this dataset's
-    # branch-audit log on first real run before trusting it.
     format: multi_file_merge
     symbol_column: gene_symbol
     files:
       - pattern: "GSE242321_RNA-seq_Atf6-fpkm.txt.gz"
         sample_column_regex: "^fpkm_"
+  - sample_id: GSE242321_WT
+    dataset: GSE242321
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE242321"
+    format: multi_file_merge
+    symbol_column: gene_symbol
+    files:
+      # WT-fpkm.txt.gz's exact header was NOT independently confirmed —
+      # "^fpkm_" is inferred from the sibling file's naming convention.
+      # Check this entry's branch-audit log on first real run.
       - pattern: "GSE242321_RNA-seq_WT-fpkm.txt.gz"
         sample_column_regex: "^fpkm_"
-  - sample_id: GSE242669
+  # FIXED 2026-09-26 (Bug Class A) — Het (2 reps) vs Hom (2 reps) were one
+  # blended mean; split by genotype.
+  - sample_id: GSE242669_Het
     dataset: GSE242669
     path: "{multiome_root}/../04_bulk_rnaseq/GSE242669"
-  - sample_id: GSE256069
+    sample_column_regex: "^Het_Rep\\d+$"
+  - sample_id: GSE242669_Hom
+    dataset: GSE242669
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE242669"
+    sample_column_regex: "^Hom_Rep\\d+$"
+  # FIXED 2026-09-26 (Bug Class A) — D16h_CTL (4 reps) vs D16h_CHIR (4
+  # reps) were one blended mean; split by treatment.
+  - sample_id: GSE256069_CTL
     dataset: GSE256069
     path: "{multiome_root}/../04_bulk_rnaseq/GSE256069"
-    # Confirmed via header check (openpyxl): .xlsx, real per-sample columns
-    # are the 8 D16h_(CTL|CHIR)<n>_<F|M> columns; everything else is
-    # FC/LFC/p.Value/FDR statistics across several contrasts.
     format: excel
-    sample_column_regex: "^D16h_(CTL|CHIR)\\d_[FM]$"
+    sample_column_regex: "^D16h_CTL\\d_[FM]$"
     symbol_column: SYMBOL
-  - sample_id: GSE262205
+  - sample_id: GSE256069_CHIR
+    dataset: GSE256069
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE256069"
+    format: excel
+    sample_column_regex: "^D16h_CHIR\\d_[FM]$"
+    symbol_column: SYMBOL
+  # FIXED 2026-09-26 (Bug Class A) — Otof_c.1315_CtoT (disease-model
+  # mutant) vs RESTARTv3 (rescue construct) were one blended mean; split
+  # by arm. sample_column_regex is NOT SET beyond this prefix match for
+  # either half — real column layout still not independently inspected
+  # (see original note on binary .xls format); check the branch-audit log
+  # on first real run.
+  - sample_id: GSE262205_Otof_CtoT
     dataset: GSE262205
     path: "{multiome_root}/../04_bulk_rnaseq/GSE262205"
-    # Confirmed via hex dump: genuine binary OLE2 .xls (needs xlrd, not
-    # openpyxl — see envs/linger.yaml). Real column layout NOT YET
-    # inspected (openpyxl can't open it; xlrd wasn't installed at the time
-    # of this investigation) — format: excel is safe to set now (the
-    # loader's read_excel-then-fallback logic will pick the right engine),
-    # but sample_column_regex is NOT SET and this entry WILL currently
-    # fall through to auto dtype-coercion, which the safety-net floor may
-    # or may not accept depending on the real columns. Inspect this
-    # dataset's branch-audit log on first run and add a regex if needed.
     format: excel
+    sample_column_regex: "^Otof_c\\.1315_CtoT"
+  - sample_id: GSE262205_RESTARTv3
+    dataset: GSE262205
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE262205"
+    format: excel
+    sample_column_regex: "^RESTARTv3_\\d+$"
   # EXCLUDED 2026-09-08 — confirmed real data is 5 kallisto abundance.h5
   # files, transcript-level (aux/ids, est_counts) with NO gene mapping
   # bundled in the file or anywhere in the download (confirmed: no .gtf in
@@ -295,111 +595,278 @@ extra_bulk_rna_inputs:
   # - sample_id: GSE266157
   #   dataset: GSE266157
   #   path: "{multiome_root}/../04_bulk_rnaseq/GSE266157"
-  - sample_id: GSE268504
+  # FIXED 2026-09-26 (Bug Class A) — DMSO (2 reps), LKI (3 reps), Ctr (4
+  # reps), DTR (6 reps) were one blended mean across 4 real conditions;
+  # split via glob_pattern, one entry per condition.
+  - sample_id: GSE268504_DMSO
     dataset: GSE268504
     path: "{multiome_root}/../04_bulk_rnaseq/GSE268504"
-    # Confirmed real RSEM genes.results shape, same columns as GSE149254 —
-    # only difference is the filename pattern (*.genes.results.gz, no
-    # ".txt" before ".gz", so the base loader's default glob patterns
-    # never matched it — this is why it originally fell through to
-    # filelist.txt).
     format: per_sample_merge
-    glob_pattern: "*.genes.results.gz"
+    glob_pattern: "*_OC_P1SC_DMSO_P1_5d_rep*.genes.results.gz"
     value_column: expected_count
     id_column: gene_id
     sample_name_regex: "^GSM\\d+_(.+)\\.genes\\.results\\.gz$"
-  - sample_id: GSE271610
+  - sample_id: GSE268504_LKI
+    dataset: GSE268504
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE268504"
+    format: per_sample_merge
+    glob_pattern: "*_OC_P1SC_LKI_P1_5d_rep*.genes.results.gz"
+    value_column: expected_count
+    id_column: gene_id
+    sample_name_regex: "^GSM\\d+_(.+)\\.genes\\.results\\.gz$"
+  - sample_id: GSE268504_Ctr
+    dataset: GSE268504
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE268504"
+    format: per_sample_merge
+    glob_pattern: "*_OC_P8SC_Ctr_rep*.genes.results.gz"
+    value_column: expected_count
+    id_column: gene_id
+    sample_name_regex: "^GSM\\d+_(.+)\\.genes\\.results\\.gz$"
+  - sample_id: GSE268504_DTR
+    dataset: GSE268504
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE268504"
+    format: per_sample_merge
+    glob_pattern: "*_OC_P8SC_DTR_rep*.genes.results.gz"
+    value_column: expected_count
+    id_column: gene_id
+    sample_name_regex: "^GSM\\d+_(.+)\\.genes\\.results\\.gz$"
+  # FIXED 2026-09-26 (Bug Class A) — Ctr (3 reps) vs KO (4 reps) were one
+  # blended mean; split by genotype.
+  # FIXED 2026-09-26 (round 2, run failure) — this directory has TWO real
+  # .xls.gz files (already documented before this split existed: "BOTH
+  # .xls.gz files here are actually plain tab-delimited text... gene_count
+  # .xls.gz (not _fpkm) is picked automatically since 'c' < 'f'
+  # alphabetically"). The strict _find_one fix means that alphabetical
+  # accident now raises instead of silently resolving, so both split
+  # entries below need an explicit glob_pattern — pinned to the counts
+  # file, preserving the exact file this pipeline was already using
+  # before the split (confirmed via the same pre-existing comment, not
+  # a new choice).
+  - sample_id: GSE271610_Ctr
     dataset: GSE271610
     path: "{multiome_root}/../04_bulk_rnaseq/GSE271610"
-    # Confirmed via hex dump: BOTH .xls.gz files here are actually plain
-    # tab-delimited text wearing a .xls extension (not real binary Excel —
-    # contrast with GSE262205 above). gene_count.xls.gz (not _fpkm) is
-    # picked automatically since "c" < "f" alphabetically and _find_one
-    # only has one xls-pattern tier. Real per-sample columns confirmed:
-    # Ctr1/Ctr2/Ctr4/KO1-4; gene_start/gene_end/gene_length are numeric
-    # but not samples, hence the explicit regex rather than auto-coercion.
     format: excel
-    sample_column_regex: "^(Ctr|KO)\\d$"
+    glob_pattern: "*gene_count*.xls.gz"
+    sample_column_regex: "^Ctr\\d$"
     symbol_column: gene_name
-  - sample_id: GSE275243
+  - sample_id: GSE271610_KO
+    dataset: GSE271610
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE271610"
+    format: excel
+    glob_pattern: "*gene_count*.xls.gz"
+    sample_column_regex: "^KO\\d$"
+    symbol_column: gene_name
+  # FIXED 2026-09-26 (Bug Class A) — P3-HET (3 reps) vs P3-WT (3 reps)
+  # were one blended mean (P3-HOMO already correctly excluded, see
+  # exclude_files_regex note kept below); split by genotype.
+  - sample_id: GSE275243_HET
     dataset: GSE275243
     path: "{multiome_root}/../04_bulk_rnaseq/GSE275243"
-    # Confirmed real shape: 9 sibling per-sample files, real 2-column
-    # header (gene_id, <sample>_FPKM) — same shape as GSE139145, just 2
-    # columns instead of 7.
-    #
-    # The 3 "P3-HOMO-*" files are DELIBERATELY EXCLUDED from glob_pattern
-    # below, confirmed via real investigation (2026-09-09), not a
-    # heuristic: each has 997,801 rows vs HET/WT's clean 51,913, but
-    # 996,663 of those (~99.9%) are BLANK gene-id rows (tab + nothing,
-    # confirmed via `cat -A` and an empty-id count) — only ~1,137 real
-    # gene entries survive per HOMO file, everything else would silently
-    # read as artifact-zero. Confirmed no cleaner combined-matrix source
-    # exists in this GSE's directory (only filelist.txt/RAW.tar besides
-    # these 9 individual files — RAW.tar is presumably just the same 9
-    # files' origin, not independently checked further). Including HOMO
-    # would inject near-total-gene-silencing artifacts into real
-    # TF-activity scoring for the P3 homozygous-mutant condition; the 6
-    # real HET/WT samples are unaffected and kept. Revisit only if GEO
-    # ever republishes a corrected HOMO export.
     format: per_sample_merge
-    glob_pattern: "GSM*.txt.gz"
-    exclude_files_regex: "HOMO"
+    glob_pattern: "GSM*_P3-HET-*.txt.gz"
     id_column: gene_id
     value_column_index: 1
     sample_name_regex: "_(P3-(?:HET|HOMO|WT)-\\d)\\.txt\\.gz$"
-  - sample_id: GSE294736
+  - sample_id: GSE275243_WT
+    dataset: GSE275243
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE275243"
+    format: per_sample_merge
+    glob_pattern: "GSM*_P3-WT-*.txt.gz"
+    id_column: gene_id
+    value_column_index: 1
+    sample_name_regex: "_(P3-(?:HET|HOMO|WT)-\\d)\\.txt\\.gz$"
+    # P3-HOMO-* files are DELIBERATELY EXCLUDED (not present in either
+    # glob_pattern above), confirmed via real investigation (2026-09-09):
+    # each has 997,801 rows vs HET/WT's clean 51,913, but ~99.9% are BLANK
+    # gene-id rows (confirmed via `cat -A` and an empty-id count) — only
+    # ~1,137 real gene entries survive per HOMO file. Revisit only if GEO
+    # ever republishes a corrected HOMO export.
+  # FIXED 2026-09-26 (Bug Class A) — Insm1-Het (3 reps) vs Insm1-KO (3
+  # reps) were one blended mean; split by genotype.
+  - sample_id: GSE294736_Het
     dataset: GSE294736
     path: "{multiome_root}/../04_bulk_rnaseq/GSE294736"
-    # Discovered during Module 7 regression verification. Confirmed real
-    # shape: 6 sibling per-sample files, classic HTSeq-count output (gene
-    # symbol + count, no header line — the ".counts.txt" naming is HTSeq's
-    # own convention). Same headerless handling as GSE198167.
     format: per_sample_merge
-    glob_pattern: "GSM*.txt.gz"
+    glob_pattern: "GSM*_Insm1-Het_OHC*.txt.gz"
     value_column_index: 0
     header: false
     sample_name_regex: "_(E18\\.5_Insm1-(?:Het|KO)_OHC\\d)\\.counts\\.txt\\.gz$"
-  - sample_id: GSE296324
+  - sample_id: GSE294736_KO
+    dataset: GSE294736
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE294736"
+    format: per_sample_merge
+    glob_pattern: "GSM*_Insm1-KO_OHC*.txt.gz"
+    value_column_index: 0
+    header: false
+    sample_name_regex: "_(E18\\.5_Insm1-(?:Het|KO)_OHC\\d)\\.counts\\.txt\\.gz$"
+  # FIXED 2026-09-26 (Bug Class A) — same issue as GSE242321 above: this
+  # entry's `files:` list already named the 2 real condition-level files
+  # (KO_summary.txt.gz / wildtype_summary.txt.gz) individually, but
+  # multi_file_merge concatenated both into ONE blended mean. Split into 2
+  # entries, each with only its own file in `files:`.
+  - sample_id: GSE296324_KO
     dataset: GSE296324
     path: "{multiome_root}/../04_bulk_rnaseq/GSE296324"
-    # Confirmed real data is 2 condition-level files (KO_summary.txt.gz,
-    # wildtype_summary.txt.gz — samples 20648X5-8 and 20648X1-4
-    # respectively), both headers confirmed directly. A third file
-    # (deseq2_results.txt.gz) exists but is a DE-statistics table, not
-    # used here.
     format: multi_file_merge
     files:
       - pattern: "GSE296324_KO_summary.txt.gz"
         sample_column_regex: "^\\d+X\\d+$"
+  - sample_id: GSE296324_WT
+    dataset: GSE296324
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE296324"
+    format: multi_file_merge
+    files:
       - pattern: "GSE296324_wildtype_summary.txt.gz"
         sample_column_regex: "^\\d+X\\d+$"
-  - sample_id: GSE299064
+  # FIXED 2026-09-26 (Bug Class A) — wt (3 reps) vs homo (3 reps) were one
+  # blended mean; split by genotype.
+  # FIXED 2026-09-26 (round 2, run failure) — confirmed via direct header
+  # inspection this dataset has 2 real sibling files, not 1:
+  #   matrix1.txt.gz: id, wt1/wt2/wt3, homo1/homo2/homo3
+  #   matrix2.txt.gz: id, Homo1/Homo2/Homo3, treat1/treat2/treat3
+  # matrix1 is the WT-vs-homo comparison this split already assumed —
+  # glob_pattern pins both entries to it, preserving that. matrix2 adds a
+  # THIRD real condition ("treat", meaning not confirmed from the data
+  # available here) and its OWN "Homo1-3" columns, capitalized differently
+  # from matrix1's "homo1-3" — whether these are the same samples
+  # re-exported or a distinct replicate set was not confirmed. Rather than
+  # guess and either double-count or blend, matrix2's Homo columns are
+  # left out of every entry below (not merged into GSE299064_homo); if
+  # they're additional real replicates, resolve by confirming with the
+  # dataset's GEO record and adding a 3rd homo source file to a
+  # per_sample_merge-style entry.
+  - sample_id: GSE299064_wt
     dataset: GSE299064
     path: "{multiome_root}/../04_bulk_rnaseq/GSE299064"
-  - sample_id: GSE300428
+    glob_pattern: "GSE299064_matrix1.txt.gz"
+    sample_column_regex: "^wt\\d$"
+  - sample_id: GSE299064_homo
+    dataset: GSE299064
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE299064"
+    glob_pattern: "GSE299064_matrix1.txt.gz"
+    sample_column_regex: "^homo\\d$"
+  - sample_id: GSE299064_treat
+    dataset: GSE299064
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE299064"
+    glob_pattern: "GSE299064_matrix2.txt.gz"
+    sample_column_regex: "^treat\\d$"
+  # FIXED 2026-09-26 (Bug Class A) — P7_Ctrl_IHC/P7_Ctrl_OHC/P7_Exp_IHC/
+  # P7_Exp_OHC (treatment x cell-type, 38/43/26/56 real columns) were one
+  # blended mean; split into the 4 real groups.
+  - sample_id: GSE300428_Ctrl_IHC
     dataset: GSE300428
     path: "{multiome_root}/../04_bulk_rnaseq/GSE300428"
-  - sample_id: GSE312253
+    sample_column_regex: "^P7_Ctrl_IHC_\\d+$"
+  - sample_id: GSE300428_Ctrl_OHC
+    dataset: GSE300428
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE300428"
+    sample_column_regex: "^P7_Ctrl_OHC_\\d+$"
+  - sample_id: GSE300428_Exp_IHC
+    dataset: GSE300428
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE300428"
+    sample_column_regex: "^P7_Exp_IHC_\\d+$"
+  - sample_id: GSE300428_Exp_OHC
+    dataset: GSE300428
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE300428"
+    sample_column_regex: "^P7_Exp_OHC_\\d+$"
+  # FIXED 2026-09-26 (round 2, run failure) — the earlier "NOT SPLIT, false
+  # positive" call above was itself wrong, for the exact reason this whole
+  # round of fixes exists: "885304"/"885304.1"/"885304.2" was never a real
+  # obs_names triple — it was pandas' own N_unmapped SUMMARY-COUNTER VALUE
+  # (885304 reads, repeated 3x across the unstranded/fwd/rev columns of
+  # STAR's ReadsPerGene.out.tab format) from whichever ONE of 12 real
+  # sibling GSM files the old loader silently picked. Confirmed via direct
+  # header inspection: 12 real per-sample files, WT-1/2/3 (3 reps) and
+  # Mut1-1/1-2/1-3/2-1/2-2/2-3/3-1/3-2/3-3 (9 reps — read as 3 biological
+  # replicates x 3 technical replicates of one mutant genotype; the
+  # Mut1/Mut2/Mut3 grouping is inferred from the filename shape, not
+  # independently confirmed against GEO metadata). Headerless STAR
+  # ReadsPerGene.Gencode.txt.gz format: gene_id + 3 count columns
+  # (unstranded/fwd-stranded/rev-stranded) plus 4 leading summary-counter
+  # rows (N_unmapped/N_multimapping/N_noFeature/N_ambiguous) that aren't
+  # real genes — harmless here since they simply won't intersect
+  # TF_activity.regulon()'s real gene-symbol space and get dropped there,
+  # same as any other non-gene id would. value_column_index: 0 selects the
+  # first (unstranded) count column, the standard default absent a
+  # confirmed stranded-protocol reason to pick fwd/rev instead. Split by
+  # genotype (WT vs Mut) via glob_pattern.
+  - sample_id: GSE312253_WT
     dataset: GSE312253
     path: "{multiome_root}/../04_bulk_rnaseq/GSE312253"
-  - sample_id: GSE312476
+    format: per_sample_merge
+    glob_pattern: "GSM*_WT-*.ReadsPerGene.Gencode.txt.gz"
+    header: false
+    value_column_index: 0
+    sample_name_regex: "_(WT-\\d+)\\.ReadsPerGene\\.Gencode\\.txt\\.gz$"
+  - sample_id: GSE312253_Mut
+    dataset: GSE312253
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE312253"
+    format: per_sample_merge
+    glob_pattern: "GSM*_Mut*.ReadsPerGene.Gencode.txt.gz"
+    header: false
+    value_column_index: 0
+    sample_name_regex: "_(Mut\\d+-\\d+)\\.ReadsPerGene\\.Gencode\\.txt\\.gz$"
+  # FIXED 2026-09-26 (Bug Class A) — control (3 reps) + a PN0h/PN4h/PN8h
+  # time course (3 reps each) were one blended mean across 4 real
+  # timepoints; split via glob_pattern, one entry per timepoint. Also
+  # fixed sample_name_regex: the original "^GSM\d+_Cochlea_(.+)\.txt\.gz$"
+  # only matched the 3 control_*.txt.gz files (which alone carry the
+  # "_Cochlea_" token) — every PN0h/4h/8h file fell through to the RAW
+  # basename as its sample name (confirmed via the obs_names audit, which
+  # showed literal "GSM9347058_PN0h_1.txt.gz"-style names instead of
+  # "PN0h_1"). Made "Cochlea_" optional so every timepoint's files get a
+  # clean sample name.
+  - sample_id: GSE312476_control
     dataset: GSE312476
     path: "{multiome_root}/../04_bulk_rnaseq/GSE312476"
-    # Confirmed real per-sample files: gene_symbol, gene_id, <sample> — same
-    # "value column literally named after the sample" shape as GSE139145,
-    # hence value_column_index rather than value_column. id_column uses
-    # gene_id (Ensembl), not gene_symbol, for consistency with the other
-    # per_sample_merge datasets.
     format: per_sample_merge
-    glob_pattern: "GSM*.txt.gz"
+    glob_pattern: "GSM*_Cochlea_control_*.txt.gz"
     value_column_index: 2
     id_column: gene_id
     symbol_column: gene_symbol
-    sample_name_regex: "^GSM\\d+_Cochlea_(.+)\\.txt\\.gz$"
+    sample_name_regex: "^GSM\\d+_(?:Cochlea_)?(.+)\\.txt\\.gz$"
+  - sample_id: GSE312476_PN0h
+    dataset: GSE312476
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE312476"
+    format: per_sample_merge
+    glob_pattern: "GSM*_PN0h_*.txt.gz"
+    value_column_index: 2
+    id_column: gene_id
+    symbol_column: gene_symbol
+    sample_name_regex: "^GSM\\d+_(?:Cochlea_)?(.+)\\.txt\\.gz$"
+  - sample_id: GSE312476_PN4h
+    dataset: GSE312476
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE312476"
+    format: per_sample_merge
+    glob_pattern: "GSM*_PN4h_*.txt.gz"
+    value_column_index: 2
+    id_column: gene_id
+    symbol_column: gene_symbol
+    sample_name_regex: "^GSM\\d+_(?:Cochlea_)?(.+)\\.txt\\.gz$"
+  - sample_id: GSE312476_PN8h
+    dataset: GSE312476
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE312476"
+    format: per_sample_merge
+    glob_pattern: "GSM*_PN8h_*.txt.gz"
+    value_column_index: 2
+    id_column: gene_id
+    symbol_column: gene_symbol
+    sample_name_regex: "^GSM\\d+_(?:Cochlea_)?(.+)\\.txt\\.gz$"
+  # FIXED 2026-09-26 (round 2, run failure) — 2 real sibling files
+  # (GSE329565_fpkm_All_Samples.csv.gz, GSE329565_readcount_All_Samples
+  # .csv.gz), same normalization-variant-of-the-same-samples shape as
+  # GSE203228/GSE154833 elsewhere in this file. Old loader silently used
+  # the fpkm file ('f' < 'r' alphabetically); pinned explicitly here via
+  # the newly-added glob_pattern override to preserve that exact prior
+  # behavior rather than switching units. Not yet condition-split — this
+  # dataset was never flagged for condition-mixing by the audit, but that
+  # audit ran against the same silently-picked fpkm file, so if it also
+  # blends multiple real conditions this hasn't been checked. Revisit if
+  # this dataset's real column names turn out to need a split too.
   - sample_id: GSE329565
     dataset: GSE329565
     path: "{multiome_root}/../04_bulk_rnaseq/GSE329565"
+    glob_pattern: "*fpkm_All_Samples.csv.gz"
   # EXCLUDED 2026-09-08 — discovered during Module 7 regression
   # verification. Confirmed real shape: 6 sibling per-sample files with a
   # header (ProbeName, "[W<n>](raw)"), but "ProbeName" values (e.g.
@@ -415,23 +882,40 @@ extra_bulk_rna_inputs:
   # - sample_id: GSE83599
   #   dataset: GSE83599
   #   path: "{multiome_root}/../04_bulk_rnaseq/GSE83599"
-  - sample_id: GSE85519
+  # FIXED 2026-09-26 (Bug Class A, on top of the pre-existing symbol_column/
+  # exclude_columns fixes below) — WTF (3 reps) vs HETF (3 reps) were one
+  # blended mean; split by genotype. Both keep the existing symbol_column/
+  # exclude_columns fixes.
+  - sample_id: GSE85519_WTF
     dataset: GSE85519
     path: "{multiome_root}/../04_bulk_rnaseq/GSE85519"
-    # Confirmed header: geneid, sym, chr, WTF1-3, HETF1-3. Two fixes:
-    # (1) symbol_column redirects var_names to `sym` instead of `geneid`
-    #     (var_names was previously in whatever identifier `geneid` uses,
-    #     zero overlap with trans_reg.index's gene-symbol space).
-    # (2) exclude_columns: [chr] — separate pre-existing bug, unrelated to
-    #     identifier space: chromosome numbers (1-19) partially parse as
-    #     numeric and were slipping past dtype-coercion's NaN-fraction
-    #     threshold, getting wrongly kept as a fake 7th "sample" alongside
-    #     the real WTF1-3/HETF1-3 columns.
+    sample_column_regex: "^WTF\\d$"
     symbol_column: sym
     exclude_columns: [chr]
-  - sample_id: GSE90821
+  - sample_id: GSE85519_HETF
+    dataset: GSE85519
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE85519"
+    sample_column_regex: "^HETF\\d$"
+    symbol_column: sym
+    exclude_columns: [chr]
+  # FIXED 2026-09-26 (Bug Class A + Bug Class C together) — real columns
+  # confirmed via obs_names audit: 8 DE-statistics columns (MVA:*/EDGE:*/
+  # SAM:* — all colon-separated, describing the WT-vs-KO contrast itself,
+  # not a sample) plus WT-1/2/3, KO-1/2/3 (real per-replicate values) and
+  # WT-1 reads/KO-1 reads/etc (raw read-count duplicates of the same
+  # replicates, not additional samples) — 28 columns total, previously ALL
+  # numeric-coerced and averaged into one blended WT+KO+stats mean. A tight
+  # exact-match regex both splits WT from KO (Bug Class A) and excludes
+  # every stats/reads column in one step (Bug Class C), since none of them
+  # match "^WT-\d+$"/"^KO-\d+$" — no separate exclude_columns needed.
+  - sample_id: GSE90821_WT
     dataset: GSE90821
     path: "{multiome_root}/../04_bulk_rnaseq/GSE90821"
+    sample_column_regex: "^WT-\\d+$"
+  - sample_id: GSE90821_KO
+    dataset: GSE90821
+    path: "{multiome_root}/../04_bulk_rnaseq/GSE90821"
+    sample_column_regex: "^KO-\\d+$"
 
 # ---------------------------------------------------------------------------
 # EXTRA_CHROMATIN_PRIOR_INPUTS — consumed by Module 5, not Modules 1-3.
@@ -547,12 +1031,43 @@ model_construction_refs:
   # - ref_id: GSE135703_adult_SC
   #   dataset: GSE135703
   #   path: "{chrom_root}/../03_model_construction/GSE135703_adult_SC"
-  - ref_id: GSE202920_P14_P28
+  # FIXED 2026-09-26 (Bug Class B, then Bug Class A) — this entry used to
+  # have no `format`/`glob_pattern` at all, so it auto-detected as a plain
+  # mtx trio and _find_one's old silent-first-file behavior picked ONE of 3
+  # real GSM files (GSM6138443_p14_matrix.mtx.gz), silently dropping both
+  # GSM6138444_p28_1/GSM6138445_p28_2 — this "P14_P28" baseline never
+  # actually contained any P28 data. Now that _find_one refuses ambiguous
+  # matches (bulk_rna_loader.py), loading this the old way would raise
+  # instead of guessing — but simply merging all 3 into one mean would
+  # trade a silent drop for a silent Bug-Class-A blend of two real,
+  # developmentally distinct postnatal ages (P14 vs P28) into one baseline.
+  # Kept as two separate baseline entries instead — P14 (1 real replicate)
+  # and P28 (mean of its 2 real replicates, which ARE the same age/
+  # condition, so averaging them is a legitimate pseudobulk, not blending).
+  - ref_id: GSE202920_P14
     dataset: GSE202920
     path: "{chrom_root}/../03_model_construction/GSE202920_P14_P28"
+    format: mtx_trio_merge
+    glob_pattern: "GSM*_p14_matrix.mtx.gz"
+  - ref_id: GSE202920_P28
+    dataset: GSE202920
+    path: "{chrom_root}/../03_model_construction/GSE202920_P14_P28"
+    format: mtx_trio_merge
+    glob_pattern: "GSM*_p28_*_matrix.mtx.gz"
+  # FIXED 2026-09-26 (Bug Class B, then Bug Class A) — directory holds 10
+  # real GSM files: 6 Cochlea_10weeks_Bio_rep1-6 and 4 Vestibule_10weeks_
+  # Bio_rep1-4 (confirmed via manual ls). No `format`/`glob_pattern`
+  # previously meant _find_one silently picked 1 of the 10 (alphabetically
+  # first: Cochlea rep1), dropping the other 9 — including every Vestibule
+  # file, tissue never intended for this cochlear-pipeline baseline anyway.
+  # Restricted to the 6 real Cochlea replicates (Vestibule dropped as a
+  # different, non-cochlear tissue — same call as GSE168041 below), merged
+  # as one pseudobulk mean across those 6 genuine biological replicates.
   - ref_id: GSE283534_mature_hc
     dataset: GSE283534
     path: "{chrom_root}/../03_model_construction/GSE283534_mature_hc"
+    format: mtx_trio_merge
+    glob_pattern: "GSM*_Cochlea_10weeks_Bio_rep*_matrix.mtx.gz"
   # EXCLUDED 2026-09-08 — confirmed via download.log this was never
   # actually downloaded ("wget returned non-zero — partial download or
   # empty suppl dir", "done — 0 file(s)"). Not a loader bug; the directory
@@ -562,12 +1077,39 @@ model_construction_refs:
   # - ref_id: GSE111349_sorted_ihc_ohc
   #   dataset: GSE111349
   #   path: "{chrom_root}/../03_model_construction/GSE111349_sorted_ihc_ohc"
+  # FIXED 2026-09-26 (Bug Class B, then Bug Class A) — directory holds 4
+  # real GSM files: P30_StrVasc_1/2/3 (scRNA) and P30_StrVasc_Nuc (snRNA —
+  # a DIFFERENT platform/protocol, not a 4th biological replicate).
+  # _find_one previously silently picked 1 of the 4. Restricted to the 3
+  # real scRNA replicates; the snRNA replicate is excluded as a platform
+  # confound (mixing scRNA and snRNA counts into one "mean" would blend two
+  # different measurement technologies, not just average real replicates).
   - ref_id: GSE136196_stria
     dataset: GSE136196
     path: "{chrom_root}/../03_model_construction/GSE136196_stria"
-  - ref_id: GSE168041_sgn_lateralwall
+    format: mtx_trio_merge
+    glob_pattern: "GSM*_P30_StrVasc_*_matrix.mtx.gz"
+    exclude_files_regex: "_Nuc_"
+  # FIXED 2026-09-26 (Bug Class B, then Bug Class A) — directory holds 16
+  # real GSM files: 2 tissues (MouseCochleaNeurons, MouseCochleaStria) x 2
+  # conditions (naive, noise-exposed) x 4 replicates. _find_one previously
+  # silently picked 1 of the 16. Split into two tissue-specific baseline
+  # entries (mirroring the existing GSE120462_GFP/GSE120462_Ikzf2
+  # precedent), each restricted to `naive` only — noise-exposed is a
+  # treatment condition, not part of this unperturbed baseline, and
+  # blending naive+noise-exposed into one mean would wash out exactly the
+  # treatment effect a downstream analysis might want to detect against
+  # this baseline.
+  - ref_id: GSE168041_neuron_naive
     dataset: GSE168041
     path: "{chrom_root}/../03_model_construction/GSE168041_sgn_lateralwall"
+    format: mtx_trio_merge
+    glob_pattern: "GSM*_MouseCochleaNeurons_naive*_matrix.mtx.gz"
+  - ref_id: GSE168041_stria_naive
+    dataset: GSE168041
+    path: "{chrom_root}/../03_model_construction/GSE168041_sgn_lateralwall"
+    format: mtx_trio_merge
+    glob_pattern: "GSM*_MouseCochleaStria_naive*_matrix.mtx.gz"
 
 # ---------------------------------------------------------------------------
 # tuning_inputs — used to set parameters BEFORE held_out_inputs is touched.
@@ -632,52 +1174,127 @@ held_out_inputs:
     dataset: GSE233559
     path: "{multiome_root}/../06_held_out/GSE233559_Tbx2_OHC_IHC"
     check: tbx2_conversion
+  # FIXED 2026-09-26 (Bug Class A) — this is the plan doc's designated
+  # aging ground truth: everything else in Module 9's aging checks is
+  # scored against its shift. Real directory holds 7 files: 3M/12M/24M/
+  # 24M_BU x Cochlea, and 3M/12M/24M x Utricle. Previously loaded with no
+  # format/glob_pattern at all, so _find_one's old silent-first-file bug
+  # picked ONE of the 7 (the youngest, 3M_Cochlea) — "the aging vector"
+  # never contained any aged tissue. Fixed in two steps: (1) restricted to
+  # Cochlea (Utricle is vestibular, not cochlear — same call as
+  # GSE283534/GSE168041 above), (2) rather than merging all 4 real Cochlea
+  # ages into one blended mean (trading the silent-drop bug for a Bug
+  # Class A blend), split into a 24M target (the "aged" state, averaging
+  # its 2 real reps incl. the _BU replicate) and a paired_baseline_entry
+  # at 3M (the study's own "young" reference) — a genuine within-study
+  # old-vs-young contrast instead of either a silent drop or a multi-age
+  # blend. 12M is left out of the primary vector (a real intermediate
+  # timepoint, but folding it in means a 3-point trend rather than a
+  # shift — a bigger redesign than fixing the blending bug; revisit if a
+  # dose-response aging check is wanted later).
   - sample_id: GSE274279_aging_snRNAseq
     dataset: GSE274279
     path: "{multiome_root}/../06_held_out/GSE274279_aging_snRNAseq"
     check: aging_vector
-  - sample_id: GSE153882_hc_aging
+    format: mtx_trio_merge
+    glob_pattern: "GSM*_24M_Cochlea*_matrix.mtx.gz"
+    paired_baseline_entry:
+      sample_id: GSE274279_3M_Cochlea
+      dataset: GSE274279
+      path: "{multiome_root}/../06_held_out/GSE274279_aging_snRNAseq"
+      format: mtx_trio_merge
+      glob_pattern: "GSM*_3M_Cochlea_matrix.mtx.gz"
+  # FIXED 2026-09-26 (Bug Class A) — real columns confirmed: 9m_IHCs(4) /
+  # 9m_OHCs(4) / 26m_IHCs(4) / 26m_OHCs(4) — 2 real ages x 2 real hair-cell
+  # types (inner/outer), previously all 16 loaded and blended into one
+  # mean. IHC and OHC are genuinely different cell types (shouldn't be
+  # pooled even before considering age), so split by cell type FIRST, then
+  # each becomes its own 26m-vs-9m paired within-study aging check —
+  # mirrors GSE274279's design above rather than picking one cell type.
+  - sample_id: GSE153882_IHC_aging
     dataset: GSE153882
     path: "{multiome_root}/../06_held_out/GSE153882_hc_aging"
     check: aging_vector_support
+    sample_column_regex: "^26m_IHCs_\\d+ RPKM value$"
+    paired_baseline_entry:
+      sample_id: GSE153882_IHC_baseline
+      dataset: GSE153882
+      path: "{multiome_root}/../06_held_out/GSE153882_hc_aging"
+      sample_column_regex: "^9m_IHCs_\\d+ RPKM value$"
+  - sample_id: GSE153882_OHC_aging
+    dataset: GSE153882
+    path: "{multiome_root}/../06_held_out/GSE153882_hc_aging"
+    check: aging_vector_support
+    sample_column_regex: "^26m_OHCs_\\d+ RPKM value$"
+    paired_baseline_entry:
+      sample_id: GSE153882_OHC_baseline
+      dataset: GSE153882
+      path: "{multiome_root}/../06_held_out/GSE153882_hc_aging"
+      sample_column_regex: "^9m_OHCs_\\d+ RPKM value$"
+  # FIXED 2026-09-26 (Bug Class A) — 1mo/9mo/26mo (3 reps each) were one
+  # blended mean across 3 real ages. Split into a 26mo target ("aged")
+  # with a paired_baseline_entry at 1mo ("young"); 9mo left out of the
+  # primary check for the same reason as GSE274279's 12M above. Both
+  # sub-entries keep the pre-existing excel/sheet_name fix (workbook's
+  # sheet 0 is a README tab, not the data).
   - sample_id: GSE154833_stria_aging
     dataset: GSE154833
     path: "{multiome_root}/../06_held_out/GSE154833_stria_aging"
     check: aging_vector_support
-    # Workbook sheet order is [READ ME, All values, Means, Diff Exp] —
-    # confirmed via openpyxl. Default (sheet 0) was reading the README tab.
-    # "All values" is the real per-sample matrix; "Means" is already
-    # condition-aggregated (too few columns) and "Diff Exp" is a
-    # statistics table, not a sample matrix.
     format: excel
     sheet_name: "All values"
-    # "All values" itself mixes 9 real per-replicate columns
-    # (<N>mo_SV_<letter>) with 3 pre-aggregated "<N>mo_SV means" columns
-    # and an "ANOVA ... FDR p-value correction" stats column — all numeric,
-    # so dtype-coercion alone can't tell them apart. Confirmed via a
-    # standalone load: without this, dtype-coercion keeps all 13 as if
-    # they were independent samples. Restrict to the real replicates only.
-    sample_column_regex: "^\\d+mo_SV_[A-Z]$"
+    sample_column_regex: "^26mo_SV_[A-Z]$"
+    paired_baseline_entry:
+      sample_id: GSE154833_stria_baseline
+      dataset: GSE154833
+      path: "{multiome_root}/../06_held_out/GSE154833_stria_aging"
+      format: excel
+      sheet_name: "All values"
+      sample_column_regex: "^1mo_SV_[A-Z]$"
+  # FIXED 2026-09-26 (Bug Class A) — real columns confirmed: this dataset
+  # blends TWO UNRELATED EXPERIMENTS. MUS/MUS_8M/MUS_12M (4 reps each) is
+  # a real aging series; PN_1h/PN_24h/PC_1d/PC_3d (4/4/4/3 reps) is a
+  # separate noise- or chemical-injury time course that has nothing to do
+  # with aging. Previously all 27 columns were loaded and blended into one
+  # mean, which mixed an acute-injury signal into "the aging shift". Fixed
+  # by restricting to the MUS series only (glob equivalent via
+  # sample_column_regex, since this is a single-matrix-file entry) and
+  # splitting into a MUS_12M target ("aged") vs a paired_baseline_entry at
+  # MUS ("young/unperturbed" baseline of this same series). MUS_8M left
+  # out of the primary check for the same reason as the other datasets'
+  # intermediate timepoints above; PN_*/PC_* dropped entirely — an acute
+  # injury time-course doesn't belong in an aging validation regardless of
+  # how the blending bug gets fixed.
   - sample_id: GSE196870_SNHL
     dataset: GSE196870
     path: "{multiome_root}/../06_held_out/GSE196870_SNHL"
     check: aging_vector_support
-    # 2026-09-13 — GSE196870_Raw_gene_FPKM_matrix.txt.csv.gz's column 0 is
-    # an Ensembl gene ID (ENSMUSG...), not a symbol. Real gene symbols
-    # live in a separate 'gene' column, which _coerce_numeric_columns()
-    # correctly drops as non-numeric "sample" data but which was never
-    # promoted to var_names — so every TF's activity came back NaN (zero
-    # overlap with the GRN's symbol-space regulon targets), confirmed via
-    # `_auroc_aupr`/spearman dropping all 586/586 TFs as NaN, and via the
-    # raw file itself (col0=ENSMUSG..., col1=symbol e.g. Zswim4/Zw10/Zyx).
-    # symbol_column routes _resolve_var_names() to use the real symbols
-    # instead of the Ensembl index (same mechanism already used elsewhere
-    # in this file for GSE203228/GSE85519's id-vs-symbol column split).
     symbol_column: gene
-  - sample_id: GSE273939_TNF_organoids
-    dataset: GSE273939
-    path: "{multiome_root}/../06_held_out/GSE273939_TNF_organoids"
-    check: aging_vector_support
+    sample_column_regex: "^MUS_12M_\\d+$"
+    paired_baseline_entry:
+      sample_id: GSE196870_MUS_baseline
+      dataset: GSE196870
+      path: "{multiome_root}/../06_held_out/GSE196870_SNHL"
+      symbol_column: gene
+      sample_column_regex: "^MUS_\\d+$"
+  # EXCLUDED 2026-09-26 (Bug Class A, unresolved) — real columns confirmed:
+  # Ele_M1-4 / Thr_M1-4 / Twe_M1-4 (12 real per-replicate columns) plus a
+  # stray `gene_Dbxref` annotation column (previously numeric-coerced and
+  # averaged in as a 13th "sample" — that part IS fixable, see
+  # exclude_columns below). But whether Ele/Thr/Twe are 3 distinct
+  # treatment conditions (still blended if averaged) or 3 organoid line/
+  # donor IDs under one shared protocol (fine to average) was not
+  # confirmed from the data available here. Rather than guess and risk
+  # repeating the exact bug this whole fix pass exists to close, this
+  # entry is commented out of aging_vector_support until that's resolved.
+  # To re-enable: uncomment, and if Ele/Thr/Twe are real conditions, split
+  # it the same way as the entries above (pick one arm as target, another
+  # as paired_baseline_entry, or add a 3rd check per arm).
+  # - sample_id: GSE273939_TNF_organoids
+  #   dataset: GSE273939
+  #   path: "{multiome_root}/../06_held_out/GSE273939_TNF_organoids"
+  #   check: aging_vector_support
+  #   exclude_columns: [gene_Dbxref]
 
 # ---------------------------------------------------------------------------
 # negative_control_input — Module 9 NEGATIVE check only, kept in its own
@@ -685,18 +1302,36 @@ held_out_inputs:
 # scored with an inverted pass/fail (should NOT reprogram).
 # ---------------------------------------------------------------------------
 negative_control_input:
-  sample_id: GSE281207_Tmie_control
+  sample_id: GSE281207_Tmie_KO
   dataset: GSE281207
   path: "{multiome_root}/../07_negative_control/GSE281207_Tmie_control"
   check: negative_control_must_not_reprogram
-  # Directory holds 6 sibling per-sample CellRanger .h5 files (P21-HET-A/B/C/F,
-  # P21-KO-B/E/F; CellRanger 7.0.0, Single Cell 3' v3 — confirmed via h5py),
-  # plus filelist.txt (a GEO manifest) and GSE281207_RAW.tar. Auto-detect
+  # Directory holds 7 sibling per-sample CellRanger .h5 files — P21-HET-A/B/C/F
+  # (4 real HET replicates) and P21-KO-B/E/F (3 real KO replicates);
+  # CellRanger 7.0.0, Single Cell 3' v3 — confirmed via h5py — plus
+  # filelist.txt (a GEO manifest) and GSE281207_RAW.tar. Auto-detect
   # previously matched filelist.txt via _load_single_matrix_file's bare
-  # "*.txt" glob before ever considering the real .h5 files. glob_pattern
-  # below is specific enough to exclude both filelist.txt and the .tar.
+  # "*.txt" glob before ever considering the real .h5 files.
+  #
+  # FIXED 2026-09-26 (Bug Class A) — this entry's glob_pattern used to be
+  # "GSM*_P21-*.h5", loading ALL 7 HET+KO files as one blended pseudobulk
+  # mean (n_files=7) before ever comparing to a baseline: the exact
+  # genotype contrast this negative control exists to isolate was averaged
+  # away before the check ever ran. Restricted to the 3 real KO replicates
+  # only; paired_baseline_entry below loads this SAME study's 4 real HET
+  # replicates as the within-study control (see validate_held_out.py's
+  # --baseline-entry-json / 09_validation.smk's paired_baseline_entry
+  # wiring) instead of diffing against the cross-study Module 4 population
+  # baseline, so real_shift is free of both the blending bug and an
+  # unnecessary cross-study batch confound.
   format: cellranger_h5_merge
-  glob_pattern: "GSM*_P21-*.h5"
+  glob_pattern: "GSM*_P21-KO-*.h5"
+  paired_baseline_entry:
+    sample_id: GSE281207_Tmie_HET
+    dataset: GSE281207
+    path: "{multiome_root}/../07_negative_control/GSE281207_Tmie_control"
+    format: cellranger_h5_merge
+    glob_pattern: "GSM*_P21-HET-*.h5"
 
 # ---------------------------------------------------------------------------
 # QC thresholds — starting points, inspect QC plots before trusting on a full run.

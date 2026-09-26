@@ -35,10 +35,44 @@ rather than invented from scratch:
         "hit" ground truth and this dataset's |shift| as the score. This
         is the actual "does this independent aging dataset agree with
         the aging vector's direction" check the plan doc describes.
+    FIXED 2026-09-26 (Bug Class A) — every aging_vector/aging_vector_support
+    entry that spans multiple real ages/timepoints (GSE274279, GSE154833,
+    GSE153882, GSE196870) used to load ALL of them into one entry and
+    average across ages before this shift was ever computed, diluting the
+    real young-vs-old signal these checks exist to detect. Each such
+    dataset is now config-split into a target (old) entry plus a
+    `paired_baseline_entry` (its own young/baseline timepoint, same
+    study), and real_shift is computed within that study via
+    --baseline-entry-json (see its help text) instead of always diffing
+    against Module 7's cross-study role="baseline" mean.
   - Negative control: same shift-comparison machinery as the positive
     reprogramming checks, but the PASS condition is inverted — this
     dataset's real profile should NOT correlate with the reprogramming
     direction the way GSE224627/GSE233559's real profiles do.
+
+  FIXED 2026-09-26 — paired within-study baseline for expression_shift.
+  Previously every expression_shift check (including the GSE281207 Tmie
+  negative control) computed real_shift as this dataset's OWN overall mean
+  minus Module 4's population pseudobulk baseline — a cross-study
+  reference built from a completely different set of experiments/batches/
+  platforms. For a dataset like GSE281207 that ships its own matched
+  control (P21-HET) alongside the condition of interest (P21-KO) in the
+  SAME study, that is strictly worse than using the dataset's own control:
+  it introduces a cross-study batch confound into exactly the comparison
+  meant to test whether the model's predictions generalize, and — because
+  the negative-control entry previously loaded ALL HET+KO files as one
+  blended mean (Bug Class A) — the "real profile" being scored was never
+  a clean KO profile in the first place.
+  `--baseline-entry-json` (optional): a second config entry (same schema as
+  `--entry-json`) pointing at this dataset's own within-study control
+  condition (e.g. GSE281207's P21-HET entry). When given, expression_shift
+  loads and log2-means BOTH entries via load_rna_only and computes
+  real_shift as target_mean - control_mean, entirely within one study,
+  instead of diffing against the cross-study Module 4 baseline. When
+  omitted, behavior is unchanged (falls back to --baseline-tsv / Module 4's
+  TG_pseudobulk.tsv), so every check that has no natural within-study
+  control of its own (the reprogramming positive checks, the standalone
+  held-out datasets) is unaffected by this addition.
 
 TWO METRICS COMPUTED FOR EVERY DATASET, matching the HTML's stated output
 exactly (not picking one over the other):
@@ -121,6 +155,16 @@ p.add_argument("--genome", required=True)
 p.add_argument("--module8-dir", required=True)
 p.add_argument("--module7-summary", required=True, help="module7_tf_activity/tf_activity_summary.tsv")
 p.add_argument("--entry-json", required=True, help="held-out/negative-control config entry")
+p.add_argument("--baseline-entry-json", default=None,
+               help="Optional second config entry (same schema as --entry-json) pointing at "
+                    "this dataset's own within-study control condition (e.g. GSE281207's "
+                    "P21-HET entry vs its P21-KO --entry-json, or GSE274279's 3M-Cochlea entry "
+                    "vs its 24M-Cochlea --entry-json). Used by BOTH modes: for "
+                    "mode=='expression_shift', real_shift is this dataset's mean minus THIS "
+                    "entry's mean instead of minus the cross-study Module 4 TG_pseudobulk.tsv "
+                    "baseline; for mode=='aging_tf_activity', this entry's TF activity (via the "
+                    "same regulon() call) replaces Module 7's cross-study role=\"baseline\" mean. "
+                    "Mutually exclusive with --baseline-tsv (expression_shift only).")
 p.add_argument("--check-spec-json", required=True,
                 help='{"mode": "expression_shift"|"aging_tf_activity", '
                      '"ko_id": "<module8 ko_id>"|null, "sign": 1|-1, '
@@ -145,6 +189,12 @@ p.add_argument("--network", default="cell population",
                     "cell_type_specific_trans_regulatory_{network}.txt instead — a real "
                     "LingerGRN 1.110 code path, not a population-only special case.")
 args = p.parse_args()
+
+if args.baseline_entry_json and args.baseline_tsv:
+    raise ValueError(
+        "--baseline-entry-json and --baseline-tsv are mutually exclusive — pick one "
+        "baseline source (paired within-study control, or a fixed pseudobulk TSV)."
+    )
 
 entry = json.loads(args.entry_json)
 spec = json.loads(args.check_spec_json)
@@ -187,20 +237,48 @@ if spec["mode"] == "expression_shift":
     )
     real_mean = np.log2(1 + real_mean.clip(lower=0))
 
+    # `predicted_baseline_mean` is what Module 8's predicted_expression.tsv
+    # is itself relative to (Module 4's population pseudobulk, or
+    # --baseline-tsv for Module 9b) — this must NEVER switch to the paired
+    # within-study control below, since Module 8 never saw that control
+    # when it generated the KO prediction; predicted_shift has to stay
+    # comparable to how it was produced regardless of which real dataset
+    # it's being checked against.
     baseline_path = args.baseline_tsv or os.path.join(args.workdir, "data", "TG_pseudobulk.tsv")
     baseline = pd.read_csv(baseline_path, sep=",", header=0, index_col=0)
-    baseline_mean = np.log2(1 + baseline.mean(axis=1).clip(lower=0))
-    print(f"baseline: {baseline_path}")
+    predicted_baseline_mean = np.log2(1 + baseline.mean(axis=1).clip(lower=0))
+    print(f"predicted-shift baseline (Module 8-consistent): {baseline_path}")
 
-    common_genes = real_mean.index.intersection(baseline_mean.index)
-    real_shift = (real_mean.loc[common_genes] - baseline_mean.loc[common_genes])
-    print(f"real_shift: {len(real_shift)} genes (held-out {sample_id} vs population baseline)")
+    if args.baseline_entry_json:
+        # `real_baseline_mean` is what THIS dataset's own real_shift is
+        # diffed against — a paired within-study control (e.g. GSE281207's
+        # own P21-HET) rather than the cross-study population baseline
+        # above, so real_shift is free of the cross-study batch confound.
+        baseline_entry = json.loads(args.baseline_entry_json)
+        baseline_adata = load_rna_only(baseline_entry)
+        real_baseline_mean = pd.Series(
+            np.asarray(baseline_adata.X.mean(axis=0)).reshape(-1), index=baseline_adata.var_names
+        )
+        real_baseline_mean = np.log2(1 + real_baseline_mean.clip(lower=0))
+        print(
+            f"real-shift baseline: paired within-study control "
+            f"sample_id={baseline_entry.get('sample_id') or baseline_entry.get('ref_id')!r} "
+            f"({baseline_adata.shape[0]} sample(s), {len(real_baseline_mean)} genes) — NOT "
+            f"the cross-study Module 4 population baseline"
+        )
+    else:
+        real_baseline_mean = predicted_baseline_mean
+
+    common_genes = real_mean.index.intersection(real_baseline_mean.index)
+    real_shift = (real_mean.loc[common_genes] - real_baseline_mean.loc[common_genes])
+    baseline_desc = "paired within-study control" if args.baseline_entry_json else "population baseline"
+    print(f"real_shift: {len(real_shift)} genes (held-out {sample_id} vs {baseline_desc})")
 
     ko_id = spec["ko_id"]
     ko_path = os.path.join(args.module8_dir, f"{ko_id}_predicted_expression.tsv")
     ko_pred = pd.read_csv(ko_path, sep="\t", index_col=0)
     ko_pred_mean = ko_pred.mean(axis=1)
-    predicted_shift = (ko_pred_mean - baseline_mean.reindex(ko_pred_mean.index)) * spec["sign"]
+    predicted_shift = (ko_pred_mean - predicted_baseline_mean.reindex(ko_pred_mean.index)) * spec["sign"]
     print(f"predicted_shift: {len(predicted_shift)} genes (Module 8 {ko_id}, sign={spec['sign']})")
 
     common = real_shift.index.intersection(predicted_shift.index)
@@ -224,14 +302,43 @@ elif spec["mode"] == "aging_tf_activity":
     print(f"regulon network: {args.network!r}")
     real_mean = real_tf_activity.mean(axis=1)
 
-    # --- baseline: Module 7's role="baseline" mean TF activity ---
-    m7 = pd.read_csv(args.module7_summary, sep="\t", index_col=0)
-    baseline_rows = m7[m7["role"] == "baseline"].drop(columns=["role"])
-    baseline_mean = baseline_rows.mean(axis=0)  # mean over the 6 baseline datasets, per TF
-    baseline_mean.index.name = None
+    # FIXED 2026-09-26 (Bug Class A) — baseline used to always be Module 7's
+    # role="baseline" mean TF activity (a cross-study reference built from
+    # model_construction_refs, different tissue/platform/age from most
+    # aging datasets). Every aging_vector/aging_vector_support entry that
+    # actually contains its own young/baseline timepoint (GSE274279,
+    # GSE154833, GSE153882, GSE196870) was previously loading ALL its ages
+    # at once and averaging them into real_mean above BEFORE this diff —
+    # blending young+old into one "aging shift" the same way GSE281207
+    # blended HET+KO. Now that each such entry is config-split into a
+    # target (old) + paired_baseline_entry (young, same study), reuse
+    # --baseline-entry-json here too: when given, the baseline's own TF
+    # activity is computed via the identical regulon() call instead of
+    # Module 7's cross-study mean, so real_shift is a genuine within-study
+    # old-vs-young contrast. Entries with no natural within-study young
+    # timepoint of their own keep the original cross-study baseline.
+    if args.baseline_entry_json:
+        baseline_entry = json.loads(args.baseline_entry_json)
+        baseline_adata = load_rna_only(baseline_entry)
+        baseline_tf_activity = TF_activity.regulon(
+            args.workdir + "/", baseline_adata, args.grn_dir, args.network, args.genome
+        )
+        baseline_mean = baseline_tf_activity.mean(axis=1)
+        print(
+            f"aging baseline: paired within-study control "
+            f"sample_id={baseline_entry.get('sample_id') or baseline_entry.get('ref_id')!r} "
+            f"({baseline_adata.shape[0]} sample(s)) — NOT the cross-study Module 7 baseline"
+        )
+    else:
+        m7 = pd.read_csv(args.module7_summary, sep="\t", index_col=0)
+        baseline_rows = m7[m7["role"] == "baseline"].drop(columns=["role"])
+        baseline_mean = baseline_rows.mean(axis=0)  # mean over every model_construction_refs entry, per TF
+        baseline_mean.index.name = None
 
     common_tfs = real_mean.index.intersection(baseline_mean.index)
     real_shift = real_mean.loc[common_tfs] - baseline_mean.loc[common_tfs]
+    baseline_desc = "paired within-study control" if args.baseline_entry_json else "Module 7 cross-study baseline"
+    print(f"aging real_shift: {len(real_shift)} TFs (held-out {sample_id} vs {baseline_desc})")
 
     aging_role = spec.get("aging_role")
     if aging_role == "reference":

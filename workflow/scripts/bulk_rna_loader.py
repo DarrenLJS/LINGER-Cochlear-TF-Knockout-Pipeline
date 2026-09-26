@@ -115,9 +115,50 @@ def _smart_open_text(path):
     return gzip.open(path, "rt") if _is_gz(path) else open(path, "rt")
 
 
-def _find_one(directory, patterns):
+def _find_one(directory, patterns, source_name=""):
+    """Every caller of this function wants exactly ONE canonical file (the
+    matrix file, the barcodes file, the single counts table, the one h5ad,
+    ...) — nothing in this loader treats "more than one match" as
+    intentional; callers that genuinely want several files (multi_file_merge,
+    cellranger_h5_merge, per_sample_merge) collect their own glob() results
+    directly and never call this function.
+
+    FIXED 2026-09-26 — this used to silently return hits[0] (the
+    alphabetically-first match) whenever a pattern matched more than one
+    file, dropping every other match with no trace anywhere: not in
+    obs_names, not in the loaded shape, nothing. Confirmed for real on
+    GSE202920_P14_P28 (3 real GSM matrix.mtx.gz files present, only
+    GSM6138443_p14 ever loaded, both GSM6138444/45_p28 files silently
+    dropped), GSE283534_mature_hc (10 files across 2 tissues, only 1
+    Cochlea replicate ever loaded), GSE136196_stria (4 files, only 1
+    loaded), GSE168041_sgn_lateralwall (16 files across 2 tissues x naive/
+    noise-exposed, only 1 loaded), and GSE274279_aging_snRNAseq — the
+    Module 9 aging reference vector itself — where only the YOUNGEST (3
+    month) of 7 real age/tissue samples was ever loaded, meaning "the
+    aging vector" contained no aged tissue at all. None of this was
+    visible from the loaded AnnData; it only surfaced by listing the
+    directories by hand and comparing against what got loaded.
+
+    Now raises instead of guessing, so any future dataset with this same
+    shape fails loudly at load time instead of silently succeeding on the
+    wrong (or 1/N) file. Resolve by adding one of: `rna_prefix` (exact-file
+    match, see _load_mtx_trio), `glob_pattern`/`glob_patterns` naming the
+    exact file(s) this entry means, or a multi-file-aware `format`
+    (`multi_file_merge`, `per_sample_merge`, `cellranger_h5_merge`, or
+    `mtx_trio_merge`) if every match is a real, wanted sample."""
     for pat in patterns:
         hits = sorted(glob.glob(os.path.join(directory, pat)))
+        if len(hits) > 1:
+            raise ValueError(
+                f"[{source_name}] pattern {pat!r} in {directory!r} matched "
+                f"{len(hits)} files, not 1: {[os.path.basename(h) for h in hits]}. "
+                f"Refusing to silently pick the first one — add `rna_prefix`, "
+                f"`glob_pattern`/`glob_patterns` naming the exact file this "
+                f"entry means, or a multi-file-aware `format` "
+                f"(multi_file_merge / per_sample_merge / cellranger_h5_merge / "
+                f"mtx_trio_merge) if every match is a real sample this entry "
+                f"should use."
+            )
         if hits:
             return hits[0]
     return None
@@ -166,13 +207,20 @@ def _detect_header_row(path, id_column, lookahead=5):
 # 20 successes routed through here are unaffected by this rewrite.
 # --------------------------------------------------------------------------
 def _load_mtx_trio(directory, prefix=None):
-    matrix = _find_one(directory, ["*matrix.mtx.gz", "*matrix.mtx"]) if not prefix else _first_existing(
+    matrix = _find_one(
+        directory, ["*matrix.mtx.gz", "*matrix.mtx"], source_name="mtx_trio:matrix"
+    ) if not prefix else _first_existing(
         [prefix + "matrix.mtx.gz", prefix + "matrix.mtx"]
     )
-    barcodes = _find_one(directory, ["*barcodes.tsv.gz", "*barcodes.tsv"]) if not prefix else _first_existing(
+    barcodes = _find_one(
+        directory, ["*barcodes.tsv.gz", "*barcodes.tsv"], source_name="mtx_trio:barcodes"
+    ) if not prefix else _first_existing(
         [prefix + "barcodes.tsv.gz", prefix + "barcodes.tsv"]
     )
-    features = _find_one(directory, ["*features.tsv.gz", "*genes.tsv.gz", "*features.tsv", "*genes.tsv"]) if not prefix else _first_existing(
+    features = _find_one(
+        directory, ["*features.tsv.gz", "*genes.tsv.gz", "*features.tsv", "*genes.tsv"],
+        source_name="mtx_trio:features",
+    ) if not prefix else _first_existing(
         [prefix + "features.tsv.gz", prefix + "genes.tsv.gz", prefix + "features.tsv", prefix + "genes.tsv"]
     )
     if not (matrix and barcodes and features):
@@ -307,14 +355,29 @@ def _resolve_var_names(df, index_values, entry, source_name=""):
 # filtering instead of blindly trusting every column after index_col=0.
 # --------------------------------------------------------------------------
 def _load_single_matrix_file(directory, entry=None):
+    entry = entry or {}
+    # FIXED 2026-09-26 (round 2, run failure) — this branch had NO way to
+    # take a config override for which file to pick, unlike every other
+    # loader branch (mtx trio's rna_prefix, cellranger's glob_patterns,
+    # etc). Confirmed real fallout: GSE163798 (4 real sibling files:
+    # HH_Vs_CH/KH_Vs_CH/SH_vs_SC/SK_Vs_SC), GSE299064 (2 real sibling
+    # files: matrix1/matrix2) both hit this gap — the old loader silently
+    # picked one alphabetically; the strict _find_one fix now raises
+    # instead, correctly, but there was no config key to resolve it with.
+    # `glob_pattern` (optional): when set, used INSTEAD OF the hardcoded
+    # pattern list below, exactly matching the file(s) this entry means —
+    # same semantics as glob_pattern on the mtx_trio_merge/per_sample_merge
+    # branches.
+    explicit_glob = entry.get("glob_pattern")
     hit = _find_one(
         directory,
+        [explicit_glob] if explicit_glob else
         ["*counts*.txt*", "*counts*.csv*", "*counts*.tsv*", "*expression*.txt*",
          "*expression*.csv*", "*expression*.tsv*", "*.txt.gz", "*.txt", "*.csv.gz", "*.csv", "*.tsv.gz", "*.tsv"],
+        source_name="single_matrix_file",
     )
     if hit is None:
         return None
-    entry = entry or {}
     sep = "," if hit.endswith((".csv", ".csv.gz")) else "\t"
     df = pd.read_csv(hit, sep=sep, index_col=0)
     numeric_df = _select_columns(df, entry, source_name=os.path.basename(hit))
@@ -326,7 +389,7 @@ def _load_single_matrix_file(directory, entry=None):
 
 
 def _load_h5ad(directory):
-    hit = _find_one(directory, ["*.h5ad"])
+    hit = _find_one(directory, ["*.h5ad"], source_name="h5ad")
     if hit is None:
         return None
     adata = ad.read_h5ad(hit)
@@ -339,10 +402,21 @@ def _load_h5ad(directory):
 # wearing an .xls extension (confirmed both exist in this dataset batch).
 # --------------------------------------------------------------------------
 def _load_excel(directory, entry=None):
-    hit = _find_one(directory, ["*.xlsx", "*.xls.gz", "*.xls"])
+    entry = entry or {}
+    # FIXED 2026-09-26 (round 2, run failure) — same gap as
+    # _load_single_matrix_file above: GSE271610's directory has 2 real
+    # .xls.gz files (already documented elsewhere in this file before this
+    # override existed), and the old loader's alphabetical silent pick is
+    # now a hard error via the strict _find_one fix, with no config key to
+    # resolve it. `glob_pattern` (optional) picks the exact file this
+    # entry means, same as _load_single_matrix_file's override.
+    explicit_glob = entry.get("glob_pattern")
+    hit = _find_one(
+        directory, [explicit_glob] if explicit_glob else ["*.xlsx", "*.xls.gz", "*.xls"],
+        source_name="excel",
+    )
     if hit is None:
         return None
-    entry = entry or {}
     raw = gzip.open(hit, "rb").read() if hit.endswith(".gz") else None
 
     # sheet_name (config key): workbooks with multiple sheets previously
@@ -539,7 +613,10 @@ def _load_multi_file_merge(directory, entry):
     frames = []
     id_to_symbol = {}
     for spec in files_spec:
-        hit = _find_one(directory, [spec["pattern"]])
+        hit = _find_one(
+            directory, [spec["pattern"]],
+            source_name=f"multi_file_merge:{spec['pattern']}",
+        )
         if hit is None:
             raise ValueError(f"multi_file_merge: pattern {spec['pattern']!r} matched nothing in {directory}")
         sep = "," if hit.endswith((".csv", ".csv.gz")) else "\t"
@@ -577,7 +654,10 @@ def _load_multi_file_merge(directory, entry):
 def _load_cellranger_h5(directory, entry):
     import scanpy as sc
 
-    hit = _find_one(directory, entry.get("glob_patterns", ["*_raw_gene_bc_matrices_h5.h5", "*.h5"]))
+    hit = _find_one(
+        directory, entry.get("glob_patterns", ["*_raw_gene_bc_matrices_h5.h5", "*.h5"]),
+        source_name="cellranger_h5",
+    )
     if hit is None:
         return None
     genome = entry.get("h5_genome_key")
@@ -686,6 +766,130 @@ def _load_cellranger_h5_merge(directory, entry):
     return adata_out
 
 
+# --------------------------------------------------------------------------
+# format: mtx_trio_merge — N sibling raw 10x mtx-trio GSM filesets (each its
+# own matrix.mtx.gz + barcodes.tsv.gz + features.tsv.gz, sharing a per-GSM
+# filename prefix), each collapsed to one pseudobulk column (same collapse
+# logic as _load_cellranger_h5_merge), merged column-wise into one
+# multi-sample matrix.
+#
+# Needed for model_construction_refs baselines shipped as raw single-cell
+# mtx trios per replicate/condition/tissue rather than as a single
+# pre-merged matrix or CellRanger .h5 (GSE202920_P14_P28, GSE283534_mature_hc,
+# GSE136196_stria, GSE168041_sgn_lateralwall) — without this branch, fixing
+# those 4 entries' condition-mixing (Phase 2) would need a runtime "load
+# everything, then split" step, which Snakemake's static DAG doesn't allow;
+# this makes the split a `glob_pattern`/`exclude_files_regex` config choice
+# instead, resolved once at load time from a fixed pattern.
+#
+# Required: glob_pattern naming the matrix files for every triplet this
+# entry should include (e.g. "*_P14_*matrix.mtx.gz" to restrict to one
+# age/tissue, mirroring the GSE120462 glob_patterns precedent). Optional:
+# exclude_files_regex (same semantics as per_sample_merge — applied to the
+# matrix filenames before their sibling barcodes/features are located, e.g.
+# to drop a platform-confounded replicate), sample_name_regex (else the
+# sample name is the matrix filename's own prefix, i.e. everything before
+# the matrix.mtx(.gz) suffix).
+# --------------------------------------------------------------------------
+def _load_mtx_trio_merge(directory, entry):
+    glob_pattern = entry["glob_pattern"]
+    exclude_files_regex = entry.get("exclude_files_regex")
+    sample_name_regex = entry.get("sample_name_regex")
+
+    matrix_files = sorted(glob.glob(os.path.join(directory, glob_pattern)))
+    if exclude_files_regex:
+        pat = re.compile(exclude_files_regex)
+        excluded = [f for f in matrix_files if pat.search(os.path.basename(f))]
+        matrix_files = [f for f in matrix_files if not pat.search(os.path.basename(f))]
+        if excluded:
+            _log(
+                f"mtx_trio_merge: exclude_files_regex={exclude_files_regex!r} "
+                f"dropped {len(excluded)} file(s): "
+                f"{[os.path.basename(f) for f in excluded]}"
+            )
+    if not matrix_files:
+        return None
+
+    pseudobulk_cols = {}
+    var_names_ref = None
+    for mpath in matrix_files:
+        base = os.path.basename(mpath)
+        prefix = None
+        for suffix in ("matrix.mtx.gz", "matrix.mtx"):
+            if base.endswith(suffix):
+                prefix = base[: -len(suffix)]
+                break
+        if prefix is None:
+            raise ValueError(
+                f"mtx_trio_merge: matched file {base!r} via glob_pattern "
+                f"{glob_pattern!r} doesn't end in matrix.mtx(.gz) — "
+                f"glob_pattern must name matrix files specifically."
+            )
+        barcodes = _first_existing([
+            os.path.join(directory, prefix + "barcodes.tsv.gz"),
+            os.path.join(directory, prefix + "barcodes.tsv"),
+        ])
+        features = _first_existing([
+            os.path.join(directory, prefix + "features.tsv.gz"),
+            os.path.join(directory, prefix + "genes.tsv.gz"),
+            os.path.join(directory, prefix + "features.tsv"),
+            os.path.join(directory, prefix + "genes.tsv"),
+        ])
+        if not (barcodes and features):
+            raise ValueError(
+                f"mtx_trio_merge: matrix file {base!r} (prefix={prefix!r}) "
+                f"has no sibling barcodes/features file with the same "
+                f"prefix in {directory!r} — every mtx trio triplet must "
+                f"share one filename prefix (GEO's standard GSM*_ naming)."
+            )
+
+        mat = sio.mmread(_smart_open(mpath)).tocsr()
+        bc = pd.read_csv(_smart_open(barcodes), header=None, sep="\t")[0].values
+        ft = pd.read_csv(_smart_open(features), header=None, sep="\t")
+        gene_ids = ft[0].values if ft.shape[1] == 1 else ft[1].values
+
+        if mat.shape[0] == len(gene_ids) and mat.shape[1] == len(bc):
+            X = mat.T
+        elif mat.shape[0] == len(bc) and mat.shape[1] == len(gene_ids):
+            X = mat
+        else:
+            raise ValueError(
+                f"mtx_trio_merge: {base}'s matrix shape {mat.shape} matches "
+                f"neither (genes={len(gene_ids)}, cells={len(bc)}) orientation."
+            )
+
+        gene_ids_str = [str(g) for g in gene_ids]
+        if var_names_ref is None:
+            var_names_ref = gene_ids_str
+        elif gene_ids_str != var_names_ref:
+            raise ValueError(
+                f"mtx_trio_merge: {base}'s gene set/order differs from the "
+                f"first triplet's ({os.path.basename(matrix_files[0])}) — "
+                f"sibling mtx trios must share identical features to merge "
+                f"as pseudobulk columns of one matrix."
+            )
+
+        if sample_name_regex:
+            m = re.search(sample_name_regex, base)
+            sample_name = m.group(1) if m else prefix.rstrip("_-.")
+        else:
+            sample_name = prefix.rstrip("_-.")
+
+        summed = np.asarray(X.sum(axis=0)).ravel()
+        pseudobulk_cols[sample_name] = summed
+        _log(
+            f"mtx_trio_merge: {base} -> sample={sample_name!r} "
+            f"({X.shape[0]} barcodes collapsed)"
+        )
+
+    mat_df = pd.DataFrame(pseudobulk_cols, index=var_names_ref)
+    adata_out = ad.AnnData(X=sp.csr_matrix(mat_df.values.T))
+    adata_out.obs_names = list(mat_df.columns)
+    adata_out.var_names = [str(g) for g in mat_df.index]
+    _log(f"branch=mtx_trio_merge n_triplets={len(matrix_files)} shape={adata_out.shape}")
+    return adata_out
+
+
 def load_rna_only(entry):
     """
     entry: one dict from extra_bulk_rna_inputs or model_construction_refs
@@ -707,6 +911,8 @@ def load_rna_only(entry):
         adata = _load_cellranger_h5(directory, entry)
     elif fmt == "cellranger_h5_merge":
         adata = _load_cellranger_h5_merge(directory, entry)
+    elif fmt == "mtx_trio_merge":
+        adata = _load_mtx_trio_merge(directory, entry)
     elif fmt == "excel":
         adata = _load_excel(directory, entry)
     else:

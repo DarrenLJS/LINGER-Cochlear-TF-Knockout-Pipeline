@@ -34,18 +34,44 @@ THREE INDEPENDENT WAYS this shows up, all checked here:
      cases (GSE274279 aging reference vector, and the barcode-based
      model_construction_refs entries) that TOKEN_FAMILIES alone cannot,
      since there is no obs_names to scan.
+  4. A dataset's directory holds MORE raw files than the loader ever
+     reads — bulk_rna_loader._find_one() globs non-recursively and returns
+     only the first match when a pattern hits more than one file. Any
+     entry not already using a multi-file-aware format silently drops
+     every sample after the first, with no trace in the loaded AnnData at
+     all (not blended, just gone). Checked via check_silent_first_file_risk().
+     This is why a barcode-based entry reporting "no condition signal
+     found" is not automatically safe to trust — it could mean the dataset
+     genuinely has one sample, or it could mean several GSM files were on
+     disk and only the first was ever loaded.
 
-KNOWN FIXED BUG IN THE PREVIOUS VERSION OF THIS SCRIPT: the original
-TOKEN_FAMILIES check flagged a family only when >=2 *different regex
-patterns* matched (e.g. both "wt" and "ko"). That missed GSE154833, whose
-9 samples are "1mo"/"9mo"/"26mo" — three different ages, but all matched
-by the SAME single pattern (`\d+mo`), so the old check saw "1 pattern
-matched" and called it single-condition. Fixed below to count distinct
-MATCHED SUBSTRINGS per family, not distinct patterns, so "1mo" vs "9mo" vs
-"26mo" are correctly seen as 3 different values of one family. Any report
-from the previous version should be treated as having false negatives on
-exactly this shape (same regex pattern, different literal value) and
-re-run with this version.
+KNOWN FIXED BUGS IN EARLIER VERSIONS OF THIS SCRIPT, both found by running
+it against the real data and checking the printed obs_names by eye rather
+than trusting the `status` column:
+  - v1: a family flagged only when >=2 *different regex patterns* matched
+    (e.g. both "wt" and "ko"). Missed GSE154833 ("1mo"/"9mo"/"26mo" — three
+    ages, one pattern `\d+mo`). Fixed in v2 to count distinct MATCHED
+    SUBSTRINGS, not distinct patterns.
+  - v2: still vocabulary-bound, so it missed GSE153882 ("9m"/"26m", not
+    "9mo"), GSE196870 (7 groups mixing month/day/hour units plus two
+    unrelated experiment arms with no shared vocabulary), and GSE273939
+    (arbitrary treatment codes "Ele"/"Thr"/"Twe" that no keyword list could
+    ever anticipate). No fixed vocabulary generalizes to free-form
+    dataset-specific naming, so v3 adds a vocabulary-FREE structural check
+    (cluster_by_prefix, below): strip each obs_name's trailing
+    replicate/well-index suffix and cluster what's left. >=2 distinct
+    prefix groups means >=2 conditions, regardless of what they're named.
+    This is what actually catches Ele/Thr/Twe, and is now the PRIMARY
+    signal; TOKEN_FAMILIES stays as a secondary, human-readable "why" when
+    it does match a known vocabulary. Validated against every real case
+    seen across two audit runs (all of the confirmed-mixed datasets above,
+    plus deliberately-single-condition cases — plain WT replicates, "ctrl1
+    .. ctrl5", "sample_1 .. sample_3" — to check it does NOT over-flag).
+    Known remaining blind spot: it assumes a replicate suffix is numeric/
+    letter/well-id-shaped; a dataset whose true replicates carry distinct
+    WORD suffixes (e.g. "Sample_Alpha"/"Sample_Beta" as arbitrary IDs for
+    the same condition) would still false-flag. Read the printed obs_names
+    yourself for anything this flags before treating it as certain.
 
 This script does NOT fix anything. It loads every dataset EXACTLY the way
 the real pipeline does (same loader, same entries, same config) and prints
@@ -192,6 +218,49 @@ def scan_token_families(obs_names):
     return hits
 
 
+def prefix_of(name):
+    """Strip a trailing replicate/well-index suffix from one sample name,
+    greedily, token by token from the end. What survives is treated as the
+    sample's "condition label" for clustering purposes — see
+    cluster_by_prefix() and the module docstring for why this exists and
+    what it does and doesn't catch."""
+    tokens = [t for t in re.split(r"[_\-\s]+", str(name)) if t != ""]
+    changed = True
+    while changed and tokens:
+        changed = False
+        last = tokens[-1]
+        if len(tokens) > 1 and re.fullmatch(r"\d+", last):
+            tokens.pop(); changed = True; continue
+        if len(tokens) > 1 and re.fullmatch(r"[A-Za-z]", last):
+            tokens.pop(); changed = True; continue
+        if len(tokens) > 1 and re.fullmatch(r"[A-Za-z]\d{1,3}", last):
+            tokens.pop(); changed = True; continue  # well ids: A01, B12
+        if len(tokens) > 1 and re.fullmatch(r"rep\d*", last, re.IGNORECASE):
+            tokens.pop(); changed = True; continue
+        if len(tokens) > 1 and last.lower() in ("value", "rpkm", "fpkm", "reads", "counts"):
+            tokens.pop(); changed = True; continue
+        # fused alpha+digit tail (e.g. "wt19", "mut21", "ele4") — strip the
+        # digit suffix in place without discarding the token, so it can
+        # still collapse to its alphabetic condition label even when there
+        # was no separator to split on in the first place.
+        m = re.fullmatch(r"([A-Za-z]+)(\d+)", last)
+        if m and m.group(1):
+            tokens[-1] = m.group(1)
+            changed = True
+            continue
+    return "_".join(tokens).lower() if tokens else str(name).lower()
+
+
+def cluster_by_prefix(obs_names):
+    """The primary, vocabulary-free condition-mixing signal — see module
+    docstring. Returns {prefix: [original names]} and the caller flags
+    when len(groups) >= 2."""
+    groups = {}
+    for n in obs_names:
+        groups.setdefault(prefix_of(n), []).append(n)
+    return groups
+
+
 def scan_obs_columns(adata):
     """For single-cell entries, obs_names (barcodes) carry no condition
     info — but if the real source was a .h5ad that already had a
@@ -219,6 +288,68 @@ def scan_obs_columns(adata):
         else:
             report_lines.append(f"obs['{col}'] ({n_unique} values, not condition-shaped)")
     return "; ".join(report_lines), flagged
+
+
+_MULTI_SAMPLE_LOADER_FORMATS = {"cellranger_h5_merge", "multi_file_merge", "per_sample_merge"}
+_RAW_FILE_PATTERNS = {
+    "matrix.mtx": ["*matrix.mtx.gz", "*matrix.mtx"],
+    "barcodes": ["*barcodes.tsv.gz", "*barcodes.tsv"],
+    "features_or_genes": ["*features.tsv.gz", "*genes.tsv.gz", "*features.tsv", "*genes.tsv"],
+    "h5": ["*.h5"],
+    "h5ad": ["*.h5ad"],
+}
+
+
+def check_silent_first_file_risk(entry):
+    """bulk_rna_loader._find_one() globs NON-recursively and returns only
+    hits[0] when a pattern matches more than one file — confirmed by
+    reading the function directly. For any entry whose format reaches
+    _find_one via an AMBIGUOUS, directory-wide wildcard (i.e. NOT already
+    pinned to one exact file), if its directory actually contains more
+    than one raw file matching the same pattern _find_one would use, every
+    sample/GSM after the first is silently dropped — not blended, not
+    visible in obs_names, not detectable from the loaded AnnData at all.
+    This is a different bug from condition-mixing (dropping data outright
+    vs. averaging it in), and is exactly why "no condition signal found in
+    the loaded data" is not the same claim as "this dataset only has one
+    condition" — it could also mean "the other conditions were never
+    loaded in the first place."
+
+    THREE ways an entry can already be pinned to one exact file/pattern,
+    none of which is actually ambiguous even though _find_one is still the
+    function that runs — all three must be exempted or this check
+    false-positives (confirmed on the first run: GSE182202_P1_RNA and both
+    GSE157398 entries use `rna_prefix`, which _load_mtx_trio() resolves via
+    exact _first_existing() checks, not a directory glob at all; GSE120462
+    _GFP/_Ikzf2 each set their OWN entry-specific `glob_patterns` naming
+    one exact filename apiece, which IS what _find_one uses for them, so
+    each entry only ever matches its own file):
+      1. `rna_prefix` set — _load_mtx_trio uses exact existence checks
+         against `prefix + "matrix.mtx.gz"` etc., never a wildcard.
+      2. `glob_pattern` (singular) set — the per_sample_merge /
+         multi_file_merge-style formats that already iterate every match
+         on purpose (also covered by _MULTI_SAMPLE_LOADER_FORMATS below).
+      3. `glob_patterns` (PLURAL) set — _load_cellranger_h5's own
+         entry-specific override, a single-file allowlist, not a
+         directory-wide default.
+    Returns (is_at_risk, {pattern_name: n_matching_files}) for every
+    pattern with >1 match."""
+    if (entry.get("format") in _MULTI_SAMPLE_LOADER_FORMATS
+            or entry.get("glob_pattern")
+            or entry.get("glob_patterns")
+            or entry.get("rna_prefix")):
+        return False, {}  # already pinned to an exact file/pattern, not ambiguous
+    directory = entry.get("path") or os.path.dirname(entry.get("rna_prefix", "") or "")
+    if not directory or not os.path.isdir(directory):
+        return False, {}
+    multi = {}
+    for label, patterns in _RAW_FILE_PATTERNS.items():
+        n = 0
+        for pat in patterns:
+            n += len(glob.glob(os.path.join(directory, pat)))
+        if n > 1:
+            multi[label] = n
+    return bool(multi), multi
 
 
 def find_possible_metadata_files(entry):
@@ -282,17 +413,31 @@ def main():
         "scratch": config["scratch"],
     }
 
-    def section(name, wrap_single=False):
+    def section(name, wrap_single=False, role=None):
+        # `role` mirrors what the real Snakemake rules inject before
+        # calling load_rna_only (07_bulk_tf_activity.smk: role="bulk" for
+        # extra_bulk_rna_inputs, role="baseline" for model_construction_refs)
+        # — bulk_rna_loader._load_cellranger_h5 branches on entry["role"]
+        # to collapse to a pseudobulk row for role=="bulk" entries
+        # (GSE120462_GFP/Ikzf2 specifically). Without injecting it here,
+        # this audit would load those two as raw 737k-barcode AnnData
+        # instead of the real pipeline's single-row pseudobulk — confirmed
+        # to matter on the second run (that mismatch was part of why they
+        # first showed up as barcode-like at all).
         raw = config.get(name)
         if raw is None:
             return []
         if wrap_single:
             raw = [raw]
-        return [dict(resolve(e, path_roots), _category=name) for e in raw]
+        entries = [dict(resolve(e, path_roots), _category=name) for e in raw]
+        if role:
+            for e in entries:
+                e["role"] = role
+        return entries
 
     entries = (
-        section("extra_bulk_rna_inputs")
-        + section("model_construction_refs")
+        section("extra_bulk_rna_inputs", role="bulk")
+        + section("model_construction_refs", role="baseline")
         + section("held_out_inputs")
         + section("negative_control_input", wrap_single=True)
     )
@@ -307,9 +452,9 @@ def main():
         row = {
             "sample_id": sample_id, "dataset": entry.get("dataset"), "category": category,
             "n_samples": None, "looks_like_barcodes": None, "obs_names": "",
-            "token_family_flags": "", "obs_column_report": "",
+            "prefix_clusters": "", "token_family_flags": "", "obs_column_report": "",
             "possible_unread_metadata_files": "", "config_multiplicity_notes": "",
-            "status": "OK", "error": "",
+            "silent_first_file_risk": "", "status": "OK", "error": "",
         }
         try:
             config_notes = describe_config_multiplicity(entry)
@@ -317,6 +462,12 @@ def main():
 
             metadata_files = find_possible_metadata_files(entry)
             row["possible_unread_metadata_files"] = "; ".join(metadata_files)
+
+            silent_risk, silent_counts = check_silent_first_file_risk(entry)
+            row["silent_first_file_risk"] = (
+                "; ".join(f"{k}={v} files, only 1st loaded" for k, v in silent_counts.items())
+                if silent_risk else ""
+            )
 
             adata = load_rna_only(entry)
             obs_names = list(adata.obs_names)
@@ -332,10 +483,27 @@ def main():
                 if token_hits else ""
             )
 
+            # Primary signal — vocabulary-free, see module docstring. Skip
+            # for barcode-like names: they have no shared "condition
+            # prefix" by construction, clustering them would just flag
+            # every single-cell dataset spuriously.
+            prefix_groups = cluster_by_prefix(obs_names) if not barcode_like else {}
+            prefix_flag = len(prefix_groups) >= 2
+            row["prefix_clusters"] = (
+                "; ".join(f"{p}({len(v)})" for p, v in sorted(prefix_groups.items()))
+                if prefix_flag else ""
+            )
+
             obs_col_report, obs_col_flag = scan_obs_columns(adata)
             row["obs_column_report"] = obs_col_report
 
-            if token_hits or config_notes or obs_col_flag:
+            # silent_risk takes priority over everything else below: it
+            # means data may be MISSING entirely (other GSM files never
+            # loaded), which makes "no condition signal found" an unsafe
+            # conclusion regardless of what the other checks say.
+            if silent_risk:
+                row["status"] = "UNRESOLVED_SILENT_FIRST_FILE_ONLY"
+            elif token_hits or prefix_flag or config_notes or obs_col_flag:
                 row["status"] = "FLAGGED_LIKELY_MIXED"
             elif barcode_like and metadata_files:
                 row["status"] = "UNRESOLVED_CHECK_METADATA_FILE_MANUALLY"
@@ -347,6 +515,11 @@ def main():
             print(f"[{row['status']:>34}] {sample_id} ({category}, n={len(obs_names)}"
                   f"{', barcode-like' if barcode_like else ''}): "
                   f"{obs_names[:12]}{' ...' if len(obs_names) > 12 else ''}")
+            if silent_risk:
+                print(f"                                     SILENT-DROP RISK: {row['silent_first_file_risk']} "
+                      f"in {entry.get('path')!r} — this dataset may have more samples on disk than were loaded")
+            if prefix_flag:
+                print(f"                                     prefix clusters: {row['prefix_clusters']}")
             if token_hits:
                 print(f"                                     token flags: {row['token_family_flags']}")
             if obs_col_flag:
@@ -371,11 +544,14 @@ def main():
         w.writerows(rows)
 
     n_flagged = sum(r["status"] == "FLAGGED_LIKELY_MIXED" for r in rows)
-    n_unresolved = sum(r["status"] == "UNRESOLVED_CHECK_METADATA_FILE_MANUALLY" for r in rows)
+    n_unresolved_meta = sum(r["status"] == "UNRESOLVED_CHECK_METADATA_FILE_MANUALLY" for r in rows)
+    n_unresolved_silent = sum(r["status"] == "UNRESOLVED_SILENT_FIRST_FILE_ONLY" for r in rows)
     n_error = sum(r["status"] == "ERROR" for r in rows)
     print(f"\n{n_flagged}/{len(rows)} entries flagged as likely mixing conditions; "
-          f"{n_unresolved}/{len(rows)} unresolved (barcode-based, with a candidate metadata "
-          f"file sitting unread in the directory — go look at it by hand); "
+          f"{n_unresolved_meta}/{len(rows)} unresolved (barcode-based, with a candidate "
+          f"metadata file sitting unread in the directory — go look at it by hand); "
+          f"{n_unresolved_silent}/{len(rows)} unresolved (directory holds more raw files than "
+          f"the loader reads — samples may be silently missing, go look at it by hand); "
           f"{n_error}/{len(rows)} failed to load (see errors above/log).")
     print(f"Wrote {args.out}")
 

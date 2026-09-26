@@ -35,6 +35,23 @@
 #     overexpression check, but PASS means the correlation/AUROC signal
 #     should NOT look reprogramming-consistent (invert_pass=True in
 #     aggregate_validation.py's pass/fail logic).
+#
+# FIXED 2026-09-26 (Bug Class A) — paired_baseline_entry. A held_out_inputs/
+# negative_control_input entry may now carry an optional
+# `paired_baseline_entry` sub-dict (same schema as the entry itself)
+# pointing at that SAME dataset's own within-study control condition, e.g.
+# GSE281207's negative_control_input entry (restricted to its 3 real
+# P21-KO files) carries its own P21-HET files as paired_baseline_entry
+# rather than being diffed against the cross-study Module 4 population
+# baseline. Forwarded to validate_held_out.py as --baseline-entry-json by
+# ALL THREE rules below (validate_one, validate_aging_vector,
+# validate_aging_support) — used the same way for expression_shift
+# (GSE281207) and aging_tf_activity (GSE274279's own 24M-vs-3M-Cochlea
+# contrast, GSE154833's 26mo-vs-1mo, GSE153882's 26m-vs-9m per cell type,
+# GSE196870's MUS_12M-vs-MUS — each config-split so the "aging shift" is a
+# real within-study old-vs-young contrast instead of a blend of every real
+# age/timepoint that dataset has). Entries with no paired_baseline_entry of
+# their own (every other check) are unaffected — the flag is simply empty.
 # =============================================================================
 
 import json
@@ -87,6 +104,18 @@ def _validation_check_spec_json(wildcards):
     return json.dumps(CHECK_SPECS[check])
 
 
+def _validation_baseline_entry_json(wildcards):
+    """Empty string when the entry has no paired_baseline_entry (every
+    held_out_inputs entry today except the negative control) — validate_one
+    below only adds --baseline-entry-json to the command line when this is
+    non-empty, so every other check's baseline stays the cross-study Module
+    4 population pseudobulk exactly as before."""
+    import json
+    entry = _HELD_OUT_ENTRIES[wildcards.sample_id]
+    baseline_entry = entry.get("paired_baseline_entry")
+    return json.dumps(baseline_entry) if baseline_entry else ""
+
+
 def _validation_inputs(wildcards):
     """Only depend on the specific Module 8 knockout this check actually
     needs (aging checks need none) — avoids forcing every knockout to
@@ -117,6 +146,7 @@ rule validate_one:
         module7_summary = f"{SCRATCH}/module7_tf_activity/tf_activity_summary.tsv",
         entry_json = _validation_entry_json,
         check_spec_json = _validation_check_spec_json,
+        baseline_entry_json = _validation_baseline_entry_json,
     log:
         f"{SCRATCH}/logs/09a_validate_{{sample_id}}.log",
     resources:
@@ -128,6 +158,11 @@ rule validate_one:
         exec &> {log}
         export PATH="{LINGER_ENV_BIN}:$PATH"
         export LD_LIBRARY_PATH="{LINGER_ENV_LIB}:$LD_LIBRARY_PATH"
+        BASELINE_ENTRY_JSON={params.baseline_entry_json:q}
+        BASELINE_ENTRY_ARGS=()
+        if [ -n "$BASELINE_ENTRY_JSON" ]; then
+            BASELINE_ENTRY_ARGS=(--baseline-entry-json "$BASELINE_ENTRY_JSON")
+        fi
         {LINGER_PYTHON} workflow/scripts/validate_held_out.py \
             --workdir {params.workdir} \
             --grn-dir {params.grn_dir} \
@@ -136,7 +171,8 @@ rule validate_one:
             --module7-summary {params.module7_summary} \
             --entry-json {params.entry_json:q} \
             --check-spec-json {params.check_spec_json:q} \
-            --output-tsv {output.score}
+            --output-tsv {output.score} \
+            "${{BASELINE_ENTRY_ARGS[@]}}"
         """
 
 
@@ -158,6 +194,9 @@ rule validate_aging_vector:
         module7_summary = f"{SCRATCH}/module7_tf_activity/tf_activity_summary.tsv",
         entry_json = json.dumps(_HELD_OUT_ENTRIES[AGING_VECTOR_SAMPLE_ID]),
         check_spec_json = json.dumps(CHECK_SPECS["aging_vector"]),
+        baseline_entry_json = json.dumps(
+            _HELD_OUT_ENTRIES[AGING_VECTOR_SAMPLE_ID].get("paired_baseline_entry")
+        ) if _HELD_OUT_ENTRIES[AGING_VECTOR_SAMPLE_ID].get("paired_baseline_entry") else "",
     log:
         f"{SCRATCH}/logs/09a_validate_{AGING_VECTOR_SAMPLE_ID}.log",
     resources:
@@ -169,6 +208,11 @@ rule validate_aging_vector:
         exec &> {log}
         export PATH="{LINGER_ENV_BIN}:$PATH"
         export LD_LIBRARY_PATH="{LINGER_ENV_LIB}:$LD_LIBRARY_PATH"
+        BASELINE_ENTRY_JSON={params.baseline_entry_json:q}
+        BASELINE_ENTRY_ARGS=()
+        if [ -n "$BASELINE_ENTRY_JSON" ]; then
+            BASELINE_ENTRY_ARGS=(--baseline-entry-json "$BASELINE_ENTRY_JSON")
+        fi
         {LINGER_PYTHON} workflow/scripts/validate_held_out.py \
             --workdir {params.workdir} \
             --grn-dir {params.grn_dir} \
@@ -178,7 +222,8 @@ rule validate_aging_vector:
             --entry-json {params.entry_json:q} \
             --check-spec-json {params.check_spec_json:q} \
             --output-tsv {output.score} \
-            --output-shift-tsv {output.shift}
+            --output-shift-tsv {output.shift} \
+            "${{BASELINE_ENTRY_ARGS[@]}}"
         """
 
 
@@ -198,6 +243,10 @@ rule validate_aging_support:
         module7_summary = f"{SCRATCH}/module7_tf_activity/tf_activity_summary.tsv",
         entry_json = lambda wildcards: json.dumps(_HELD_OUT_ENTRIES[wildcards.sample_id]),
         check_spec_json = json.dumps(CHECK_SPECS["aging_vector_support"]),
+        baseline_entry_json = lambda wildcards: (
+            json.dumps(_HELD_OUT_ENTRIES[wildcards.sample_id]["paired_baseline_entry"])
+            if _HELD_OUT_ENTRIES[wildcards.sample_id].get("paired_baseline_entry") else ""
+        ),
     log:
         f"{SCRATCH}/logs/09a_validate_{{sample_id}}.log",
     resources:
@@ -209,6 +258,11 @@ rule validate_aging_support:
         exec &> {log}
         export PATH="{LINGER_ENV_BIN}:$PATH"
         export LD_LIBRARY_PATH="{LINGER_ENV_LIB}:$LD_LIBRARY_PATH"
+        BASELINE_ENTRY_JSON={params.baseline_entry_json:q}
+        BASELINE_ENTRY_ARGS=()
+        if [ -n "$BASELINE_ENTRY_JSON" ]; then
+            BASELINE_ENTRY_ARGS=(--baseline-entry-json "$BASELINE_ENTRY_JSON")
+        fi
         {LINGER_PYTHON} workflow/scripts/validate_held_out.py \
             --workdir {params.workdir} \
             --grn-dir {params.grn_dir} \
@@ -218,7 +272,8 @@ rule validate_aging_support:
             --entry-json {params.entry_json:q} \
             --check-spec-json {params.check_spec_json:q} \
             --output-tsv {output.score} \
-            --aging-vector-tsv {input.aging_vector_shift}
+            --aging-vector-tsv {input.aging_vector_shift} \
+            "${{BASELINE_ENTRY_ARGS[@]}}"
         """
 
 
