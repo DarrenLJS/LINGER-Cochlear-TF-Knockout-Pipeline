@@ -435,15 +435,35 @@ def main():
                 e["role"] = role
         return entries
 
+    # generalization_test_panel entries use `test_id`/`gene` rather than
+    # sample_id/ref_id — load_rna_only() itself only ever looks at path/
+    # format/glob_pattern-style keys, so this reuses the same loader path,
+    # but the `sample_id = entry.get("sample_id") or entry.get("ref_id")`
+    # line further down needs a matching id here too, or every row prints
+    # "None" instead of the real test_id. Handled via a small pre-pass
+    # rather than touching the shared `sample_id` lookup, so behavior for
+    # every pre-existing category is unchanged.
+    gen_panel = section("generalization_test_panel")
+    for e in gen_panel:
+        e.setdefault("sample_id", e.get("test_id"))
+
     entries = (
         section("extra_bulk_rna_inputs", role="bulk")
         + section("model_construction_refs", role="baseline")
         + section("held_out_inputs")
         + section("negative_control_input", wrap_single=True)
+        + gen_panel
     )
     print(f"Auditing {len(entries)} config entries "
           f"(extra_bulk_rna_inputs + model_construction_refs + held_out_inputs + "
-          f"negative_control_input) for within-entry condition mixing.\n")
+          f"negative_control_input + generalization_test_panel) for within-entry "
+          f"condition mixing.\n"
+          f"NOTE: generalization_test_panel entries ({len(gen_panel)} of them) point at "
+          f"setup_scripts/download_datasets.sh Section 10's download paths, which must "
+          f"exist on disk already (run that section first) — and their path/format/"
+          f"glob_pattern in config_eddie.yaml are still placeholders pending this exact "
+          f"audit, so expect to iterate on config_eddie.yaml based on what this run finds, "
+          f"not to have it pass clean on the first try.\n")
 
     rows = []
     for entry in entries:

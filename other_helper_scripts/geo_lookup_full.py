@@ -4,12 +4,22 @@ geo_lookup_full.py — Stage A metadata triage for the condition-mixing audit.
 
 Extends the original geo_lookup.py (which hand-listed 22 extra_bulk_rna_inputs
 accessions) to EVERY unique GSE accession referenced anywhere in
-config_eddie.yaml (69 as of 2026-09-26), auto-discovered from the config
-itself rather than hand-typed, and tags each one with which config
-section(s)/sample_id(s) reference it. That mapping is what turns a bare GEO
-title into something actionable: "does this dataset's own description
-suggest multiple conditions, AND does the pipeline currently keep those
-conditions separate or blend them into one entry."
+config_eddie.yaml, auto-discovered from the config itself rather than
+hand-typed, and tags each one with which config section(s)/sample_id(s)
+reference it. That mapping is what turns a bare GEO title into something
+actionable: "does this dataset's own description suggest multiple
+conditions, AND does the pipeline currently keep those conditions separate
+or blend them into one entry."
+
+EXTENDED 2026-09-27 — also scans setup_scripts/download_datasets.sh for
+every `download_geo_suppl "GSEnnn"` call. This closes a real gap: 9
+accessions (GSE331301, GSE152551, GSE181057, GSE312224, GSE122732,
+GSE127683, GSE209791, GSE240187, GSE283708) are downloaded to disk by that
+script's Sections 1/8/9 but were never referenced anywhere in
+config_eddie.yaml — the original version of this script would silently
+never look them up, since it only ever walked the parsed YAML. Each result
+now carries `in_config` / `in_download_script` / `orphaned` so those 9 are
+surfaced explicitly instead of just being absent from the output.
 
 This does NOT touch any downloaded data and needs no conda env beyond
 `requests`/`pyyaml` — it queries NCBI's E-utilities (esearch+esummary against
@@ -21,8 +31,10 @@ Eddie's login node both work, no downloaded datasets required.
 
 Usage:
     pip install requests pyyaml   # if not already available
-    python geo_lookup_full.py --config /path/to/config_eddie.yaml
+    python geo_lookup_full.py --config /path/to/config_eddie.yaml \\
+        --download-script /path/to/setup_scripts/download_datasets.sh
     # writes geo_titles_full.json next to wherever you run this from
+    # (run from the repo root and both defaults just work)
 """
 import argparse
 import json
@@ -110,6 +122,26 @@ def build_accession_index(config):
     return index
 
 
+def find_accessions_in_download_script(path):
+    """Regex-scan download_datasets.sh for every download_geo_suppl call,
+    the same shape used throughout that script:
+        download_geo_suppl "GSE157398"  "${MULTI}/GSE157398"
+    Returns the set of accessions it downloads, independent of whether
+    config_eddie.yaml references them at all — that gap is exactly what
+    this function exists to surface (see module docstring)."""
+    try:
+        with open(path) as f:
+            text = f.read()
+    except FileNotFoundError:
+        print(f"WARNING: --download-script {path!r} not found — skipping the "
+              f"download-script cross-check, orphan detection will be incomplete.")
+        return set()
+    found = set()
+    for m in re.finditer(r'download_geo_suppl\s+"(GSE\d+)"', text):
+        found.add(m.group(1))
+    return found
+
+
 def lookup(acc):
     r = requests.get(ESEARCH, params={
         "db": "gds", "term": f"{acc}[Accession]", "retmode": "json",
@@ -140,14 +172,21 @@ def main():
                      help="Path to config_eddie.yaml (default: config/config_eddie.yaml, "
                           "i.e. run this from the repo root)")
     ap.add_argument("--out", default="geo_titles_full.json")
+    ap.add_argument("--download-script", default="setup_scripts/download_datasets.sh",
+                     help="Path to download_datasets.sh (default: setup_scripts/"
+                          "download_datasets.sh, i.e. run this from the repo root)")
     args = ap.parse_args()
 
     with open(args.config) as f:
         config = yaml.safe_load(f)
 
-    accessions = sorted(find_all_accessions(config))
+    config_accessions = find_all_accessions(config)
+    script_accessions = find_accessions_in_download_script(args.download_script)
+    accessions = sorted(config_accessions | script_accessions)
     index = build_accession_index(config)
-    print(f"Found {len(accessions)} unique GSE accessions in {args.config}")
+    print(f"Found {len(config_accessions)} unique GSE accessions in {args.config}, "
+          f"{len(script_accessions)} in {args.download_script}, "
+          f"{len(accessions)} total (union).")
 
     results = []
     for acc in accessions:
@@ -156,12 +195,21 @@ def main():
         except Exception as e:
             info = {"accession": acc, "title": None, "summary": None, "error": str(e)}
         info["used_by"] = index.get(acc, [])
+        info["in_config"] = acc in config_accessions
+        info["in_download_script"] = acc in script_accessions
+        # Orphaned: physically downloaded (or download-script says to) but no
+        # config entry anywhere reads it — this is the exact gap that let
+        # GSE331301/GSE152551/GSE181057/GSE312224/GSE122732/GSE127683/
+        # GSE209791/GSE240187/GSE283708 sit unused. `in_config` uses the same
+        # regex as build_accession_index, so an orphan can never spuriously
+        # carry a non-empty `used_by`.
+        info["orphaned"] = info["in_download_script"] and not info["in_config"]
         text = f"{info.get('title') or ''} {info.get('summary') or ''}"
         matches = sorted(set(m.group(0).lower() for m in CONDITION_KEYWORDS.finditer(text)))
         info["condition_keyword_hits"] = matches
         info["flag_multi_condition_suspected"] = len(matches) > 0
         results.append(info)
-        flag = "FLAG" if info["flag_multi_condition_suspected"] else "    "
+        flag = "ORPHAN" if info["orphaned"] else ("FLAG  " if info["flag_multi_condition_suspected"] else "      ")
         print(f"[{flag}] {acc} (used by {len(info['used_by'])} entr{'y' if len(info['used_by'])==1 else 'ies'}): "
               f"{info.get('title') or info.get('error')}")
         time.sleep(0.4)  # stay under NCBI's unauthenticated rate limit
@@ -170,9 +218,14 @@ def main():
         json.dump(results, f, indent=2)
 
     n_flagged = sum(r.get("flag_multi_condition_suspected") for r in results)
+    n_orphaned = sum(r.get("orphaned") for r in results)
     print(f"\n{n_flagged}/{len(results)} accessions flagged on keyword heuristic alone "
           f"(this is a first pass, not a verdict — some are already split correctly in "
           f"config, e.g. GSE120462; Stage B settles it against the real data).")
+    print(f"{n_orphaned}/{len(results)} accessions are ORPHANED — downloaded by "
+          f"download_datasets.sh but referenced by no config_eddie.yaml entry. "
+          f"Look these up in {args.out} (title/summary/n_samples) before deciding "
+          f"which config category (if any) each belongs in.")
     print(f"Wrote {args.out}")
 
 

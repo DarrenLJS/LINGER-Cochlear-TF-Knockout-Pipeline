@@ -110,9 +110,24 @@ def _smart_open(path):
     return gzip.open(path, "rb") if _is_gz(path) else open(path, "rb")
 
 
-def _smart_open_text(path):
-    """Text-mode counterpart of _smart_open, for line-by-line scanning."""
-    return gzip.open(path, "rt") if _is_gz(path) else open(path, "rt")
+def _smart_open_text(path, encoding=None):
+    """Text-mode counterpart of _smart_open, for line-by-line scanning.
+
+    encoding: FIXED 2026-09-28 — added after GSE196199's real per-sample
+    files (GSM5862579_WT_1_expression.txt.gz etc.) confirmed
+    UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 0.
+    Byte 0xFF at position 0 is a UTF-16 BOM (0xFF 0xFE little-endian), not a
+    corrupt file — some GEO submitters export from Excel/Windows tools that
+    default to UTF-16. `encoding=None` keeps the previous UTF-8 default for
+    every other entry; set `encoding: "utf-16"` on an entry whose real file
+    is confirmed UTF-16 (don't guess — confirm via `file <path>` or the same
+    UnicodeDecodeError message first)."""
+    mode_kwargs = {"encoding": encoding} if encoding else {}
+    return (
+        gzip.open(path, "rt", **mode_kwargs)
+        if _is_gz(path)
+        else open(path, "rt", **mode_kwargs)
+    )
 
 
 def _find_one(directory, patterns, source_name=""):
@@ -171,7 +186,7 @@ def _first_existing(paths):
     return None
 
 
-def _detect_header_row(path, id_column, lookahead=5):
+def _detect_header_row(path, id_column, lookahead=5, encoding=None):
     """
     Some GEO per-sample-merge files prepend a caption line (and sometimes a
     blank line after it) before the real tab-delimited header — confirmed
@@ -185,7 +200,7 @@ def _detect_header_row(path, id_column, lookahead=5):
     (unaffected by pandas' blank-line handling) and return the index of the
     first one that actually contains id_column as a tab-separated token.
     """
-    with _smart_open_text(path) as f:
+    with _smart_open_text(path, encoding=encoding) as f:
         for i in range(lookahead):
             line = f.readline()
             if not line:
@@ -513,6 +528,9 @@ def _load_per_sample_merge(directory, entry):
     sample_name_regex = entry.get("sample_name_regex")
     exclude_files_regex = entry.get("exclude_files_regex")
     symbol_column = entry.get("symbol_column")
+    # FIXED 2026-09-28 — see _smart_open_text's docstring. None preserves
+    # the previous UTF-8-only behavior for every entry that doesn't set it.
+    encoding = entry.get("encoding")
 
     files = sorted(glob.glob(os.path.join(directory, glob_pattern)))
     if exclude_files_regex:
@@ -543,7 +561,7 @@ def _load_per_sample_merge(directory, entry):
 
         if id_column is None:
             header_arg = 0 if header else None
-            df = pd.read_csv(f, sep="\t", index_col=0, header=header_arg)
+            df = pd.read_csv(f, sep="\t", index_col=0, header=header_arg, encoding=encoding)
             this_value_column = df.columns[value_column_index] if value_column_index is not None else value_column
             s = df[this_value_column]
         else:
@@ -555,10 +573,10 @@ def _load_per_sample_merge(directory, entry):
             # per-file and skip up to it explicitly rather than assuming
             # every sibling file has an identical preamble.
             if header:
-                header_row = _detect_header_row(f, id_column)
-                df = pd.read_csv(f, sep="\t", skiprows=header_row, header=0)
+                header_row = _detect_header_row(f, id_column, encoding=encoding)
+                df = pd.read_csv(f, sep="\t", skiprows=header_row, header=0, encoding=encoding)
             else:
-                df = pd.read_csv(f, sep="\t", header=None)
+                df = pd.read_csv(f, sep="\t", header=None, encoding=encoding)
             this_value_column = df.columns[value_column_index] if value_column_index is not None else value_column
             if rollup == "sum_by_gene":
                 s = df.groupby(rollup_id_column)[this_value_column].sum()

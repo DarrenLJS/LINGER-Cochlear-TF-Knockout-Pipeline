@@ -65,6 +65,19 @@ samples:
     h5_path:        "{multiome_root}/GSE224563/GSM7026052_P70_cochlea_deafened_10x_scRNA_scATAC_filtered_feature_bc_matrix.h5"
     atac_fragments:  "{multiome_root}/GSE224563/GSM7026053_P70_cochlea_deafened_10x_scRNA_scATAC_atac_fragments.tsv.gz"
 
+  # EXCLUDED 2026-09-27 — GSE331301 is downloaded by download_datasets.sh's
+  # Section 1 ("single-cell multiome") but was never added here. Confirmed
+  # via other_helper_scripts/geo_lookup_full.py Stage A (real NCBI eutils
+  # metadata, not a folder-name guess): "Distal Enhancer-Insulator Module of
+  # GDF6 is Essential for Cochlear Formation [single-cell multiome]" —
+  # taxon Homo sapiens, n_samples=4. This pipeline is mouse-only by design:
+  # `linger.method: scNN` was chosen specifically because LINGER's other
+  # method is hardcoded to human hg19/hg38 and confirmed structurally
+  # incompatible with this project's mouse data (see the `linger:` block's
+  # own comment below). A human dataset cannot be folded into the mm10
+  # `samples:` DAG regardless of how well-matched its cell content looks —
+  # do not re-add without a real plan for cross-species handling first.
+
 # ---------------------------------------------------------------------------
 # EXTRA_BULK_RNA_INPUTS — rerouted RNA, not part of the paired-multiome DAG.
 # Consumed by Module 7 (bulk TF activity), not Modules 1-3.
@@ -1111,6 +1124,80 @@ model_construction_refs:
     format: mtx_trio_merge
     glob_pattern: "GSM*_MouseCochleaStria_naive*_matrix.mtx.gz"
 
+  # CONFIRMED 2026-09-27 via other_helper_scripts/geo_lookup_full.py Stage A
+  # (real NCBI eutils metadata) — downloaded by download_datasets.sh's
+  # Section 8 ("Reference-Only") but never referenced anywhere in this file
+  # until now. GSE152551 and GSE312224 below are added live: same role as
+  # GSE136196_stria/GSE168041 above (a sorted, non-cochlear-hair-cell
+  # reference population used as an unperturbed baseline), mouse, and
+  # neither tripped Stage A's condition-mixing keyword heuristic.
+  # format/glob_pattern are still first-guess, unconfirmed against the real
+  # downloaded files — expect these to need the same kind of fix every
+  # other entry in this file already went through (see the many
+  # "FIXED 2026-09-26 (Bug Class A)" comments) once
+  # other_helper_scripts/audit_condition_mixing.py Stage B actually runs
+  # against them.
+  #   GSE152551 — "Characterization of Rare Spindle and Root Cell
+  #   Transcriptional Profiles in the Stria Vascularis of the Adult Mouse
+  #   Cochlea", snRNA-seq, n_samples=2, no condition-mixing flags.
+  # FIXED 2026-09-28 (Bug Class B path, then format) — corrected path
+  # confirmed 2 real GSM samples, each its own 10x snRNA mtx trio (h5 +
+  # mtx.gz + barcodes/features), not a plain matrix: GSM4618124 (_SVMETH)
+  # and GSM4618125 (_SVLAT). Both are the SAME rare spindle/root reference
+  # population (2 sort gates/replicates of it, not 2 different conditions —
+  # no genotype/treatment split implied by the name), so merged as one
+  # pseudobulk mean, same logic as GSE283534's 6-replicate merge above.
+  - ref_id: GSE152551_stria_spindle
+    dataset: GSE152551
+    # PATH FIXED 2026-09-28 — this used to point at 03_model_construction,
+    # which is wrong: download_datasets.sh Section 8 actually deposits this
+    # under 08_reference_only (REF="${DATA_ROOT}/08_reference_only"), not
+    # 03_model_construction. That mismatch, not a failed download, is why
+    # `ls` on the old path returned "No such file or directory."
+    path: "{chrom_root}/../08_reference_only/GSE152551_stria_spindle"
+    format: mtx_trio_merge
+    glob_pattern: "GSM*_P30_StrVasc_Nuc_*_matrix.mtx.gz"
+  #   GSE312224 — "Single-cell RNA-seq of endothelial and pericyte
+  #   populations in the mouse cochlear stria vascularis", 2 FACS-sorted
+  #   batches (Tie2-GFP endothelial-enriched + NG2-DsRed pericyte-enriched),
+  #   10x, 1-3mo mice — CONFIRMED 2 distinct populations, split into 2
+  #   ref_ids below, do not merge into one mean (mirrors the
+  #   GSE120462_GFP/GSE120462_Ikzf2 and GSE168041_neuron_naive/stria_naive
+  #   precedent elsewhere in this file).
+  # PATH FIXED 2026-09-28 — same bug as GSE152551 above: both ref_ids below
+  # used to point at 03_model_construction; real download lands under
+  # 08_reference_only (download_datasets.sh Section 8's REF variable).
+  # FORMAT FIXED 2026-09-28 — corrected path confirms exactly 2 real GSM
+  # samples, each its own 10x mtx trio: GSM9340800_EC (endothelial) and
+  # GSM9340807_PC (pericyte) — matches the "_EC"/"_PC" abbreviations
+  # implied by the config's own naming, one real replicate each.
+  - ref_id: GSE312224_stria_endothelial
+    dataset: GSE312224
+    path: "{chrom_root}/../08_reference_only/GSE312224_stria_endothelial"
+    format: mtx_trio_merge
+    glob_pattern: "GSM*_EC_matrix.mtx.gz"
+  - ref_id: GSE312224_stria_pericyte
+    dataset: GSE312224
+    path: "{chrom_root}/../08_reference_only/GSE312224_stria_endothelial"
+    format: mtx_trio_merge
+    glob_pattern: "GSM*_PC_matrix.mtx.gz"
+
+  # STILL PENDING (2026-09-27) — GSE181057, "Cochlear fibrocyte and
+  # osteoblast lineages expressing type 2 deiodinase identified with a
+  # Dio2-CreERt2 allele". Mouse, scRNA-seq of 46 individually FACS-picked
+  # cells. NOT promoted to live like the two above: Stage A's keyword
+  # heuristic flagged "heterozygous" in its summary ("heterozygous Dio2ERt2
+  # mice"). This almost certainly describes the Cre-driver genotype used for
+  # lineage labeling (a tool, not a KO-vs-WT comparison needing separate
+  # arms) rather than a real second condition, but that is a guess, not a
+  # confirmed read — exactly the distinction Stage B's obs_names check
+  # exists to settle. Fill in path/format once downloaded-file layout is
+  # known, then run audit_condition_mixing.py before uncommenting.
+  # - ref_id: GSE181057_fibrocyte
+  #   dataset: GSE181057
+  #   path: "{chrom_root}/../03_model_construction/GSE181057_fibrocyte"
+  #   # format/glob_pattern: confirm against real downloaded files first
+
 # ---------------------------------------------------------------------------
 # tuning_inputs — used to set parameters BEFORE held_out_inputs is touched.
 # GSE150000/GSE150002/GSE182202/GSE224563 correctly excluded — they live
@@ -1151,6 +1238,51 @@ tuning_inputs:
   - sample_id: GSE316951
     dataset: GSE316951
     path: "{multiome_root}/../05_tuning_validation/GSE316951"
+
+  # RESOLVED 2026-09-27 via other_helper_scripts/geo_lookup_full.py Stage A
+  # (real NCBI eutils metadata) — all 5 were downloaded by
+  # download_datasets.sh's Section 9 ("Auxiliary Low-Weight") but never
+  # referenced anywhere in this file. NONE of the 5 are added live — every
+  # one fails this pipeline's existing scope rules on species, tissue, or
+  # role grounds, the same rules already applied elsewhere in this file:
+  #
+  #   GSE122732 — "RNA-seq analysis of hair cell regeneration in the
+  #   mammalian vestibular system and its potentiation by Atoh1". Mouse, but
+  #   VESTIBULAR utricle (excluded tissue — same precedent as GSE168041's
+  #   Vestibule exclusion and GSE283534's tissue restriction above), and it's
+  #   a damage+Atoh1-transduction PERTURBATION study, not a passive baseline
+  #   or tuning dataset — wrong role even setting tissue aside.
+  #
+  #   GSE127683 — EXCLUDED 2026-09-28. Stage A's eutils lookup came back
+  #   empty; manually confirmed via the real GEO page (screenshot):
+  #   "Single cell RNA-seq analysis of hair cell regeneration in the
+  #   mammalian vestibular system and its potentiation by Atoh1". Mouse,
+  #   56 samples, contributor Groves AK, same citation as GSE122732 (Jen HI,
+  #   Hill MC, Tao L, Sheng K et al., eLife 2019 Apr 29;8, PMID 31033441) —
+  #   this is that same study's single-cell SubSeries companion to
+  #   GSE122732's bulk data. Same exclusion as GSE122732 above: VESTIBULAR
+  #   tissue, and an Atoh1-transduction perturbation study, not a passive
+  #   cochlear baseline or tuning dataset. No longer BLOCKED.
+  #
+  #   GSE209791 — "High-resolution transcriptional analysis reveals stepwise
+  #   fate conversion of supporting cells to hair cells in the chicken
+  #   auditory epithelium". Taxon Gallus gallus — WRONG SPECIES for this
+  #   mm10/mouse-only pipeline (see the `linger:` block's scNN/mouse-only
+  #   note). Excluded on species grounds alone.
+  #
+  #   GSE240187 — "Single cell RNA seq analysis of the chicken basilar
+  #   papilla following in vivo aminoglycoside induced hair cell ablation".
+  #   Also Gallus gallus — same exclusion as GSE209791.
+  #
+  #   GSE283708 — "Unraveling age-related cellular and molecular changes
+  #   associated with vestibular hair cells". Mouse, but confirmed
+  #   VESTIBULAR (matches what the download path's "_vestibular" suffix
+  #   already suggested) — excluded on the same tissue grounds as GSE122732.
+  #
+  # Left as a documented exclusion rather than silently dropped so the next
+  # person doesn't re-discover these 5 orphans and re-litigate the same
+  # question. All 5 now resolved (GSE127683 confirmed 2026-09-28 via manual
+  # GEO lookup) — none added live.
 
 # ---------------------------------------------------------------------------
 # held_out_inputs — Module 9 POSITIVE checks only. Physically read-only on
@@ -1332,6 +1464,393 @@ negative_control_input:
     path: "{multiome_root}/../07_negative_control/GSE281207_Tmie_control"
     format: cellranger_h5_merge
     glob_pattern: "GSM*_P21-HET-*.h5"
+
+# ---------------------------------------------------------------------------
+# generalization_test_panel — NEW 2026-09-27, not in the original 7-category
+# schema documented in LINGER_datasets.docx. Deliberately its own top-level
+# block, not merged into held_out_inputs: held_out_inputs checks whether the
+# model reproduces a KNOWN reprogramming/aging result for the TFs it was
+# specifically built around (Atoh1/Gfi1/Pou4f3/Tbx2); this checks whether the
+# trained GRN GENERALIZES to TFs it was never specifically built to knock
+# out. Different question, different pass/fail semantics (beats a baseline —
+# no-change / matched-mean / ridge — not "matches a frozen known direction"),
+# so a different block. Source: Cochlea-model-testing-set-2.xlsx, whose own
+# 7 test dimensions are carried through as `test_dimensions` below (①
+# perturbation accuracy, ② unseen-gene generalization, ③ combinatorial, ④
+# dynamic identity, ⑤ cross-cell-type transfer, ⑥ known-factor ranking, ⑦
+# prospective blind).
+#
+# ALL 8 ENTRIES ARE PENDING two checks before any of this feeds Module 8/9:
+#   1. other_helper_scripts/check_tf_eligibility.py — is `gene` actually a
+#      row in Exp.tsv (real TF, present in this pipeline's trained network)?
+#      Only Pknox2/Casz1/Zbtb20/Prdm16 are expected to pass based on known
+#      biology (homeodomain/zinc-finger TFs); Notch1/Ctnnb1 (entry 8) are the
+#      open question this check is FOR, not a foregone conclusion either way
+#      — see check_tf_eligibility.py's docstring.
+#   2. other_helper_scripts/audit_condition_mixing.py Stage B — path/format/
+#      glob_pattern below are placeholders pointing at where
+#      download_datasets.sh Section 10 puts each download; they have NOT
+#      been checked against the real files yet the way every entry in
+#      extra_bulk_rna_inputs above has (see this file's many "FIXED
+#      2026-09-26 (Bug Class A)" comments — assume every one of these needs
+#      the same scrutiny before its mean/pseudobulk is trusted).
+#
+# SCOPE: 13 of the xlsx panel's 21 datasets are deliberately excluded here —
+# see download_datasets.sh Section 10's header comment for the full
+# breakdown (5 microarray + 1 BioProject accession dropped from scope; 7
+# datasets dropped because their gene is not a DNA-binding TF).
+# ---------------------------------------------------------------------------
+generalization_test_panel:
+  # FIXED 2026-09-28 (Bug Class A) — extracted the RAW.tar: real folder has
+  # 6 real GSM samples across 3 DIFFERENT ages (P26 x3, P33 x2, P12 x2 —
+  # that's 7 counted, actually P33 has 2 OE reps + 1 separate P33 control =
+  # 3 P33 samples total), confirming the notes' suspicion: the download
+  # does pull other timepoints/arms. Only GSM5261977/78 (cHCsP33_1/2 —
+  # tamoxifen-induced Atoh1-OE, P33) and GSM5261981 (cochlear_P33 — P33
+  # control, no induction) are this test's real units; P26 (x3) and P12
+  # (x2) samples are a different experiment's timepoints and must NOT be
+  # pulled in. Old CellRanger 2.x-style mtx trio (genes.tsv.gz, not
+  # features.tsv.gz) — loader supports both names. glob_pattern uses a
+  # character class on the last GSM digit (977 vs 978) to grab exactly the
+  # 2 real OE reps without touching any P26/P12 file.
+  - test_id: GSE173217_Atoh1_OE_P33
+    dataset: GSE173217
+    gene: Atoh1
+    direction: OE
+    perturbation_mode: grn_row_boost   # NEW Module 8 mode — see linger_perturbation.py plan; not yet implemented
+    test_dimensions: ["1", "4", "6"]   # perturbation accuracy; dynamic identity; known-factor ranking
+    age: P33
+    path: "{multiome_root}/../10_generalization_test/GSE173217_Atoh1_OE_P33"
+    format: mtx_trio_merge
+    glob_pattern: "GSM526197[78]_cHCsP33_*_matrix.mtx.gz"
+    paired_baseline_entry:
+      test_id: GSE173217_Atoh1_control_P33
+      dataset: GSE173217
+      path: "{multiome_root}/../10_generalization_test/GSE173217_Atoh1_OE_P33"
+      format: mtx_trio_merge
+      glob_pattern: "GSM5261981_cochlear_P33_matrix.mtx.gz"   # single real replicate, n=1
+    eligibility: pending_check_tf_eligibility   # expected ELIGIBLE — Atoh1 already in perturbation.knockouts
+    notes: >-
+      P12-P13 tamoxifen induction, P33 endpoint. Control arm (GSM5261981)
+      is n=1 — a real limitation of this dataset, not a loader bug; treat
+      any variance/CI estimate on the control side accordingly. GSM5261979/
+      80 (P12) and GSM5261974/75/76 (P26) are a separate experiment in the
+      same GSE and are deliberately excluded by glob_pattern, not merged.
+
+  # FIXED 2026-09-28 (Bug Class A, caught by audit_condition_mixing.py Stage
+  # B on first pass) — real file has 10 sample columns: KO_1..5, WT_1..5 (a
+  # clean, evenly-replicated within-study KO-vs-WT design; obs_names/
+  # prefix_clusters confirmed this exactly). Previously loaded with no
+  # sample_column_regex, so both arms were blended into one mean. Split via
+  # sample_column_regex; WT moved into paired_baseline_entry (same
+  # convention as GSE274279/GSE153882/GSE154833 in held_out_inputs above),
+  # since a generalization-panel KO test is only interpretable against its
+  # own study's real WT, not some other dataset's baseline.
+  - test_id: GSE171921_Pknox2_KO_P8
+    dataset: GSE171921
+    gene: Pknox2
+    direction: KO
+    perturbation_mode: grn_row_zero
+    test_dimensions: ["1", "2"]        # perturbation accuracy; unseen-gene generalization
+    age: P8
+    path: "{multiome_root}/../10_generalization_test/GSE171921_Pknox2_KO_P8"
+    sample_column_regex: "^KO_\\d+$"
+    paired_baseline_entry:
+      test_id: GSE171921_Pknox2_WT_P8
+      dataset: GSE171921
+      path: "{multiome_root}/../10_generalization_test/GSE171921_Pknox2_KO_P8"
+      sample_column_regex: "^WT_\\d+$"
+    eligibility: pending_check_tf_eligibility
+
+  # FIXED 2026-09-28 (Bug Class A) — header confirmed via zcat: columns are
+  # Geneid, WT1..WT5, cKO1..cKO5 — a clean 5v5 blend in
+  # GSE300215_FeatureCounts.txt.gz (glob_pattern already excludes the
+  # sibling GSE300215_edgeR_Casz1cKOvsWT.txt.gz DE-stats file). Split via
+  # sample_column_regex; WT moved into paired_baseline_entry, same
+  # convention as GSE171921/GSE279618/GSE199369 above. `Geneid` is the row
+  # index, not a sample column, so it's untouched by either regex.
+  - test_id: GSE300215_Casz1_cKO_P4
+    dataset: GSE300215
+    gene: Casz1
+    direction: cKO
+    perturbation_mode: grn_row_zero
+    test_dimensions: ["1", "2"]
+    age: P4
+    path: "{multiome_root}/../10_generalization_test/GSE300215_Casz1_cKO_P4"
+    glob_pattern: "GSE300215_FeatureCounts.txt.gz"   # excludes the edgeR DE-stats sibling file
+    sample_column_regex: "^cKO\\d+$"
+    paired_baseline_entry:
+      test_id: GSE300215_Casz1_WT_P4
+      dataset: GSE300215
+      path: "{multiome_root}/../10_generalization_test/GSE300215_Casz1_cKO_P4"
+      glob_pattern: "GSE300215_FeatureCounts.txt.gz"
+      sample_column_regex: "^WT\\d+$"
+    eligibility: pending_check_tf_eligibility
+    notes: >-
+      Geneid values in the real header (e.g. 497097, 100503874) look like
+      Entrez Gene IDs, not gene symbols — same category of gap already seen
+      on GSE135703/GSE266157/GSE116702 (Ensembl/Entrez-only, no symbol
+      column). Confirm var_names resolves to something that actually
+      overlaps trans_reg.index (gene symbols); if not, this needs a
+      symbol_column override or an Entrez->symbol mapping step before
+      trusting any computed shift, same as those other entries.
+
+  # FIXED 2026-09-28 (Bug Class A) — real file is single-cell (65 named
+  # columns, one per cell, not per-replicate): P10_WT_OHC-1..48 (48 WT OHCs)
+  # and "P10_Casz1 CKO OHC-1..17" (17 cKO OHCs — note the real column name
+  # has a SPACE before "CKO", not an underscore; regex below matches that
+  # literally). Previously blended all 65 into one mean, averaging 48 WT
+  # cells straight into the 17 real cKO cells. Split via sample_column_regex;
+  # WT moved into paired_baseline_entry, same convention as GSE171921 above.
+  - test_id: GSE279618_Casz1_KO_P10
+    dataset: GSE279618
+    gene: Casz1
+    direction: KO
+    perturbation_mode: grn_row_zero
+    test_dimensions: ["1", "4", "5"]   # + dynamic identity, cross-cell-type transfer
+    age: P10
+    path: "{multiome_root}/../10_generalization_test/GSE279618_Casz1_KO_P10"
+    sample_column_regex: "^P10_Casz1 CKO OHC-\\d+$"
+    paired_baseline_entry:
+      test_id: GSE279618_Casz1_WT_P10
+      dataset: GSE279618
+      path: "{multiome_root}/../10_generalization_test/GSE279618_Casz1_KO_P10"
+      sample_column_regex: "^P10_WT_OHC-\\d+$"
+    eligibility: pending_check_tf_eligibility
+    notes: >-
+      Second, independent dataset for the same gene as GSE300215 at a
+      different age — score separately, do not average the two together
+      (different ages, different perturbation type cKO vs KO). Both arms
+      are OHC-only (single cell type) — n=48 WT vs n=17 cKO, real cell-level
+      replicates, not bulk reps; treat n accordingly in any variance/CI
+      calculation (don't assume bulk-style low-n reps).
+
+  # FIXED 2026-09-28 (Bug Class A) — extracted RAW.tar: 10 real per-sample
+  # files, one GSM each, NOT a single matrix. Real groups: 5 WT
+  # (GSM5862579/80/81 named "WT_1/2/3" + GSM6658616/17 named "WT_4/5", a
+  # later-batch top-up) and 5 KO (GSM5862582/83/84 named "ZB20KO_1/2/3" +
+  # GSM6658618/19 named confusingly just "KO_4/5" — same real WT-vs-KO
+  # design across both upload batches, just inconsistent submitter naming).
+  # Real header (zcat'd from GSM5862579_WT_1_expression.txt.gz), 7 tab-
+  # separated columns: <garbled bytes>Gene ID / WT_1 FPKM / Other Gene ID /
+  # Transcripts / Gene Type / Transcripts Number / WT_1 FPKM — note the
+  # value column appears TWICE (same value both times, confirmed from the
+  # 2 data rows shown) and the id column's header has non-UTF8 garbage
+  # bytes before "Gene ID". `id_column` is deliberately left UNSET here
+  # (falls back to index_col=0, same fix pattern as GSE116702's headerless
+  # case above) specifically to avoid a literal string match against that
+  # garbled header text. `symbol_column: "Other Gene ID"` routes var_names
+  # to the real gene SYMBOL (e.g. Klhl1, Hmbox1) instead of the numeric
+  # first-column Gene ID (Entrez-style) — same intent as GSE85519's
+  # symbol_column fix above. `value_column_index: 0` takes the first of
+  # the two identical FPKM columns (position 0 among columns after the id
+  # column). Column name itself changes per sibling file (e.g. "WT_2 FPKM",
+  # "ZB20KO_1 FPKM") but position 0 is assumed constant across all 10 real
+  # files — not independently confirmed for every file, only this one.
+  - test_id: GSE196199_Zbtb20_cKO_P10
+    dataset: GSE196199
+    gene: Zbtb20
+    direction: cKO
+    perturbation_mode: grn_row_zero
+    test_dimensions: ["1", "2"]
+    age: P10
+    path: "{multiome_root}/../10_generalization_test/GSE196199_Zbtb20_cKO_P10"
+    format: per_sample_merge
+    glob_pattern: "GSM*_expression.txt.gz"
+    exclude_files_regex: "_WT_"          # keeps both real KO naming styles: _ZB20KO_ and _KO_
+    value_column_index: 0
+    symbol_column: "Other Gene ID"
+    encoding: "utf-16"   # FIXED 2026-09-28 — real files are UTF-16 (confirmed via
+                          # UnicodeDecodeError: byte 0xff at position 0 = UTF-16 LE
+                          # BOM). bulk_rna_loader.py's _load_per_sample_merge and
+                          # _smart_open_text now support this field (2026-09-28).
+    paired_baseline_entry:
+      test_id: GSE196199_Zbtb20_WT_P10
+      dataset: GSE196199
+      path: "{multiome_root}/../10_generalization_test/GSE196199_Zbtb20_cKO_P10"
+      format: per_sample_merge
+      glob_pattern: "GSM*_expression.txt.gz"
+      exclude_files_regex: "_(ZB20)?KO_"   # drops both real KO naming styles, keeps all 5 real WT
+      value_column_index: 0
+      symbol_column: "Other Gene ID"
+      encoding: "utf-16"
+    eligibility: pending_check_tf_eligibility
+    notes: >-
+      value_column_index/symbol_column confirmed against GSM5862579 only —
+      if Stage B's obs_names/shape check comes back odd for any of the
+      other 9 files, re-inspect that specific file's header before
+      trusting the merge (same "confirm before trusting" convention as
+      every other per_sample_merge entry in this file). encoding: utf-16
+      assumed constant across all 10 sibling files (only GSM5862579 was
+      directly confirmed) — if any sibling file throws a decode error
+      under utf-16 too, it may need `latin-1` or a per-file override
+      instead.
+
+  # FIXED 2026-09-28 (Bug Class A) — extracted RAW.tar: 9 real per-sample
+  # files, 3 genotypes x 3 reps each: WT, Het (heterozygous), Null (full
+  # knockout). Primary KO-vs-baseline pair uses Null (the real full
+  # knockout, matching this entry's `direction: KO`) vs WT; Het is a real
+  # intermediate dosage arm, left commented out rather than merged into
+  # either side — same call as GSE199369's P30 reference and GSE274279's
+  # 12M timepoint elsewhere in this file (a real group, but a 3-point
+  # dose-response redesign rather than a shift, out of scope for this
+  # pass). Real header (zcat'd from GSM5772189_Prdm16_WT_1.txt.gz), clean
+  # 2 tab-separated columns: "Gene" / "Counts" — a plain, consistently-
+  # named HTSeq/featureCounts-style export (no sample name embedded in the
+  # column header, unlike GSE196199 above), so a single fixed value_column
+  # works across all 9 sibling files.
+  - test_id: GSE193046_Prdm16_KO_E14_5
+    dataset: GSE193046
+    gene: Prdm16
+    direction: KO
+    perturbation_mode: grn_row_zero
+    test_dimensions: ["1", "2"]
+    age: "E14.5"
+    path: "{multiome_root}/../10_generalization_test/GSE193046_Prdm16_KO_E14_5"
+    format: per_sample_merge
+    glob_pattern: "GSM*_Prdm16_Null_*.txt.gz"
+    id_column: Gene
+    value_column: Counts
+    paired_baseline_entry:
+      test_id: GSE193046_Prdm16_WT_E14_5
+      dataset: GSE193046
+      path: "{multiome_root}/../10_generalization_test/GSE193046_Prdm16_KO_E14_5"
+      format: per_sample_merge
+      glob_pattern: "GSM*_Prdm16_WT_*.txt.gz"
+      id_column: Gene
+      value_column: Counts
+    eligibility: pending_check_tf_eligibility
+    notes: >-
+      "Gene" column holds Ensembl IDs (e.g. ENSMUSG00000000001), not gene
+      symbols — same category of gap as GSE135703/GSE266157/GSE300215
+      elsewhere in this file. Needs an Ensembl->symbol mapping step (or a
+      symbol_column, if one turns out to exist in a fuller header this
+      3-line check didn't show) before trusting a gene-space overlap with
+      trans_reg.index. id_column/value_column confirmed against
+      GSM5772189 only — spot-check at least one Het/Null file's header
+      too before trusting the full merge.
+  # - test_id: GSE193046_Prdm16_Het_E14_5
+  #   dataset: GSE193046
+  #   path: "{multiome_root}/../10_generalization_test/GSE193046_Prdm16_KO_E14_5"
+  #   format: per_sample_merge
+  #   glob_pattern: "GSM*_Prdm16_Het_*.txt.gz"
+  #   notes: >-
+  #     Real heterozygous dosage arm, n=3. Not part of the primary Null-vs-WT
+  #     pair above — kept commented for a possible future dose-response
+  #     check (WT/Het/Null), not this check.
+
+  # FIXED 2026-09-28 (Bug Class A) — the `age: P14` tag on this entry was
+  # WRONG/incomplete: real file has 151 columns spanning TWO ages and what
+  # is actually a cell-identity conversion, not a simple KO-vs-WT: "P14_iOHC-
+  # 1..46" (Tbx2-KO IHCs converted toward an OHC-like identity — Tbx2 loss
+  # is known to push IHCs to an OHC-like fate, matches deck2's "IHC→OHC-
+  # like" dimension-④ framing for this exact GSE), "P14_WT IHC-1..55" (real
+  # age-matched WT baseline), and "P30_WT IHC-1..50" (a LATER-age WT
+  # reference, not part of the P14 comparison). Blending all 3 into one
+  # mean previously washed out the actual iOHC-vs-WT contrast with an
+  # unrelated older WT group. Split via sample_column_regex; P14_WT IHC
+  # moved into paired_baseline_entry (mirrors GSE171921/GSE279618 above).
+  # P30_WT IHC is deliberately left OUT of the primary pair — same call as
+  # GSE274279's 12M / GSE154833's 9mo intermediate timepoints in
+  # held_out_inputs (a real group, but a 3-point-trend redesign rather than
+  # a shift, out of scope for this pass). If a P14-vs-P30 WT maturation
+  # trend is wanted later for dimension ④, GSE199369_Tbx2_P30_WT_ref below
+  # is commented out and ready to reactivate for that, not for this check.
+  - test_id: GSE199369_Tbx2_KO_P14
+    dataset: GSE199369
+    gene: Tbx2
+    direction: KO
+    perturbation_mode: grn_row_zero
+    test_dimensions: ["1", "4"]
+    age: P14
+    path: "{multiome_root}/../10_generalization_test/GSE199369_Tbx2_KO_P14"
+    sample_column_regex: "^P14_iOHC-\\d+$"
+    paired_baseline_entry:
+      test_id: GSE199369_Tbx2_WT_IHC_P14
+      dataset: GSE199369
+      path: "{multiome_root}/../10_generalization_test/GSE199369_Tbx2_KO_P14"
+      sample_column_regex: "^P14_WT IHC-\\d+$"
+    eligibility: pending_check_tf_eligibility   # expected ELIGIBLE — Tbx2 already in perturbation.knockouts
+    notes: >-
+      Tbx2 already has a held_out_inputs check (GSE233559, check:
+      tbx2_conversion). This is a SEPARATE, independent dataset — keep
+      distinct, do not merge into the held_out_inputs entry or average
+      the two results. Real design here is a cell-identity conversion
+      (IHC->iOHC), not a simple KO-vs-WT expression shift — confirm
+      perturbation_mode/scoring logic actually fits before trusting a
+      grn_row_zero + shift-magnitude result for this one.
+  # - test_id: GSE199369_Tbx2_P30_WT_ref
+  #   dataset: GSE199369
+  #   path: "{multiome_root}/../10_generalization_test/GSE199369_Tbx2_KO_P14"
+  #   sample_column_regex: "^P30_WT IHC-\\d+$"
+  #   notes: >-
+  #     Later-age WT reference from the same study, real n=50. Not part of
+  #     the P14 iOHC-vs-WT pair above — kept commented for a possible future
+  #     P14-vs-P30 WT maturation-trend check under dimension 4, not this
+  #     check.
+
+  # FIXED 2026-09-28 (Bug Class A + Bug Class C together) — real file
+  # confirmed via obs_names/prefix_clusters: it's a DE-results table, not a
+  # plain matrix. Columns: control_1-3 (n=3), b-catenin-OE_1-3 (n=3),
+  # catenin_log2(fold_change)/catenin_p_value (precomputed stats, not
+  # samples), Notch1-KO_1-3 (n=3), notch_log2(fold_change)/notch_p_value,
+  # "b-catenin-OE and Notch1-KO"_1-3 (n=3, the double), both_log2(fold_
+  # change)/both_p_value. This is exactly the 4-arm design the xlsx source
+  # and the notes below already anticipated (control / single-A / single-B /
+  # double) — real data confirms it, and the paper's own log2FC/p-value
+  # columns must be excluded the same way GSE90821's MVA:/EDGE:/SAM: stat
+  # columns are excluded elsewhere in this file (Bug Class C), or they'd be
+  # miscounted as 6 extra "samples".
+  #
+  # `combinatorial_arms` below is a NEW config mechanism — no existing entry
+  # in this file has a 4-arm combinatorial design, so
+  # audit_condition_mixing.py and the real bulk_rna_loader do NOT understand
+  # this key yet. This block documents the real, confirmed structure so the
+  # loader/audit code changes (needed before this entry can be re-audited or
+  # wired into Module 8/9) have an exact target to implement against — do
+  # not expect Stage B to pass on this entry until that loader support
+  # exists. sample_column_regex/exclude_columns values below are the
+  # per-arm patterns that support should apply.
+  - test_id: GSE86204_Notch1_Ctnnb1_combo_P7
+    dataset: GSE86204
+    gene: [Notch1, Ctnnb1]
+    direction: [KO, activation]
+    perturbation_mode: PENDING          # depends entirely on check_tf_eligibility.py's verdict
+    test_dimensions: ["1", "3", "6"]    # perturbation accuracy; COMBINATORIAL (the panel's only ③ dataset); known-factor ranking
+    age: P7
+    path: "{multiome_root}/../10_generalization_test/GSE86204_Notch1_Ctnnb1_combo_P7"
+    exclude_columns:
+      - "catenin_log2(fold_change)"
+      - "catenin_p_value"
+      - "notch_log2(fold_change)"
+      - "notch_p_value"
+      - "both_log2(fold_change)"
+      - "both_p_value"
+    combinatorial_arms:            # NEW mechanism — see comment above; not yet read by any loader
+      control:
+        sample_column_regex: "^control_\\d+$"
+      ctnnb1_activation_only:
+        sample_column_regex: "^b-catenin-OE_\\d+$"
+      notch1_ko_only:
+        sample_column_regex: "^Notch1-KO_\\d+$"
+      double_perturbation:
+        sample_column_regex: "^b-catenin-OE and Notch1-KO_\\d+$"
+    eligibility: pending_check_tf_eligibility
+    notes: >-
+      PENDING, not confirmed in scope. Notch1/Ctnnb1 are signaling proteins,
+      not DNA-binding TFs themselves — check_tf_eligibility.py checks both
+      names AND their canonical effectors (Rbpj, Tcf7, Lef1) against
+      Exp.tsv. If none are eligible, this entry (and dimension ③
+      combinatorial testing entirely, since this is the panel's only
+      combinatorial dataset) drops from scope — do not wire into
+      perturbation.knockouts before that check returns ELIGIBLE for at
+      least one usable gene name. Real data confirms all 4 test units the
+      xlsx source implied: single Notch1 KO, single Ctnnb1 activation,
+      double perturbation, and — since the paper's own per-arm log2FC vs
+      control is already computed in the excluded stat columns — a direct
+      epistasis arm (ε_AB = Δ_AB - (Δ_A+Δ_B)) is computable once loader
+      support for combinatorial_arms exists, without needing to
+      recompute the paper's own single-arm fold-changes from scratch.
 
 # ---------------------------------------------------------------------------
 # QC thresholds — starting points, inspect QC plots before trusting on a full run.

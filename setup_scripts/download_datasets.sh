@@ -284,6 +284,14 @@ download_geo_suppl "GSE281207"  "${NEG}/GSE281207_Tmie_control"
 
 # =============================================================================
 # SECTION 8 — REFERENCE-ONLY
+#
+# RESOLVED 2026-09-27 (see config_eddie.yaml's model_construction_refs block
+# for the full reasoning): GSE152551 and GSE312224 confirmed mouse, cochlear
+# stria reference populations, now live in model_construction_refs (split
+# into 2 ref_ids for GSE312224's 2 real FACS batches). GSE181057 confirmed
+# mouse/cochlear too but held back pending a Stage B condition-mixing check
+# (its GEO summary mentions "heterozygous", likely just the Cre-driver
+# genotype, not confirmed). All 3 stay downloaded here regardless.
 # =============================================================================
 log ""
 log "=== SECTION 8: Reference-Only Datasets ==="
@@ -295,9 +303,23 @@ download_geo_suppl "GSE312224"  "${REF}/GSE312224_stria_endothelial"
 
 # =============================================================================
 # SECTION 9 — AUXILIARY LOW-WEIGHT
+#
+# RESOLVED 2026-09-27, GSE127683 resolved 2026-09-28 (see config_eddie.yaml's
+# tuning_inputs block for the full reasoning): NONE of these 5 are used
+# anywhere in config_eddie.yaml, and none should be. GSE122732/GSE283708 are
+# vestibular (excluded tissue, same precedent as GSE168041); GSE209791/
+# GSE240187 are Gallus gallus (chicken — wrong species, this pipeline is
+# mouse/mm10-only); GSE127683 returned no resolvable GEO metadata from Stage
+# A's eutils lookup, but manual lookup of the real GEO page (screenshot,
+# 2026-09-28) confirmed it's the single-cell SubSeries companion to
+# GSE122732 — same study, same PI (Groves AK), same citation (Jen HI et al.,
+# eLife 2019, PMID 31033441) — so it gets the same vestibular exclusion, no
+# longer blocked. Left downloaded here rather than removed from this
+# script, so the exclusion is a documented decision a future person can see
+# and re-check, not a silent gap.
 # =============================================================================
 log ""
-log "=== SECTION 9: Auxiliary Low-Weight Datasets ==="
+log "=== SECTION 9: Auxiliary Low-Weight Datasets [ALL EXCLUDED FROM CONFIG — SEE ABOVE] ==="
 AUX="${DATA_ROOT}/09_auxiliary"
 
 download_geo_suppl "GSE122732"  "${AUX}/GSE122732"
@@ -305,6 +327,60 @@ download_geo_suppl "GSE127683"  "${AUX}/GSE127683"
 download_geo_suppl "GSE209791"  "${AUX}/GSE209791"
 download_geo_suppl "GSE240187"  "${AUX}/GSE240187"
 download_geo_suppl "GSE283708"  "${AUX}/GSE283708_vestibular"
+
+# =============================================================================
+# SECTION 10 — GENERALIZATION TEST PANEL          [PENDING AUDIT — see below]
+#
+# From Cochlea-model-testing-set-2.xlsx (2026-09-27 pipeline extension): real
+# TF knockout/cKO/OE datasets for genes OUTSIDE the current
+# perturbation.knockouts list (Atoh1/Gfi1/Pou4f3/Tbx2), used to test whether
+# the trained GRN generalizes to TFs it was never specifically built around,
+# not to test a known reprogramming/aging result the way 06_held_out does.
+# Deliberately kept OUT of 06_held_out — different pass/fail semantics, see
+# config_eddie.yaml's `generalization_test_panel:` block.
+#
+# SCOPE NOTE: the xlsx panel originally listed 21 datasets. 13 are
+# deliberately NOT downloaded here:
+#   - 5 microarray series (GSE18567, GSE149916, GSE61406, GSE72722,
+#     GSE70659) — bulk_rna_loader.py has no probe-ID -> gene-symbol loader
+#     (same gap that excludes GSE83599 above); out of scope for now.
+#   - PRJNA1221644 — a BioProject accession, not a GSE; download_geo_suppl's
+#     GEO-FTP-suppl approach does not apply; out of scope for now.
+#   - GSE215951 (Kcnj2 OE), GSE281437 (Trim71 cKO), GSE304941 (Neu4 KO),
+#     GSE176114 (Dusp1 KO), GSE246143 (Myo7a cKO), GSE292561 (Fgfr3 KO),
+#     GSE217373 (Ptch1 KO) — Kcnj2/Trim71/Neu4/Dusp1/Myo7a/Fgfr3/Ptch1 are
+#     not DNA-binding TFs (a K+ channel, an RBP/E3 ligase, a sialidase, a
+#     phosphatase, a motor protein, and two receptors respectively) — no row
+#     in Exp.tsv for linger_perturbation.py to zero/boost. Out of scope for
+#     Module 8; their real data, if wanted later, belongs in an
+#     expression-only validation check instead, never in this section.
+#
+# GSE86204 is PENDING, not confirmed: it covers Notch1 KO / Ctnnb1
+# activation / double-perturbation / interaction (the panel's only
+# combinatorial-dimension dataset), but Notch1/Ctnnb1 are signaling proteins,
+# not TFs themselves — run other_helper_scripts/check_tf_eligibility.py
+# (checks Notch1/Ctnnb1 AND their canonical DNA-binding effectors Rbpj/
+# Tcf7/Lef1 against Exp.tsv) before deciding whether this dataset has any
+# eligible target at all. Downloaded here regardless, since download cost is
+# low and the eligibility check needs Module 4/6 output that may not exist
+# yet — do not wire it into perturbation.knockouts until that check passes.
+#
+# Run other_helper_scripts/audit_condition_mixing.py's Stage B against every
+# entry below (once added to config_eddie.yaml) before trusting any
+# per-dataset mean/pseudobulk — same convention as every other section here.
+# =============================================================================
+log ""
+log "=== SECTION 10: Generalization Test Panel [PENDING AUDIT] ==="
+GENTEST="${DATA_ROOT}/10_generalization_test"
+
+download_geo_suppl "GSE173217"  "${GENTEST}/GSE173217_Atoh1_OE_P33"          # OE, existing gene, new dataset/direction
+download_geo_suppl "GSE171921"  "${GENTEST}/GSE171921_Pknox2_KO_P8"         # KO, new gene
+download_geo_suppl "GSE300215"  "${GENTEST}/GSE300215_Casz1_cKO_P4"        # cKO, new gene
+download_geo_suppl "GSE279618"  "${GENTEST}/GSE279618_Casz1_KO_P10"        # KO, same new gene, 2nd dataset/age
+download_geo_suppl "GSE196199"  "${GENTEST}/GSE196199_Zbtb20_cKO_P10"      # cKO, new gene
+download_geo_suppl "GSE193046"  "${GENTEST}/GSE193046_Prdm16_KO_E14_5"     # KO, new gene
+download_geo_suppl "GSE199369"  "${GENTEST}/GSE199369_Tbx2_KO_P14"         # KO, existing gene, new dataset
+download_geo_suppl "GSE86204"   "${GENTEST}/GSE86204_Notch1_Ctnnb1_combo_P7"  # PENDING eligibility — see note above
 
 # =============================================================================
 # SUMMARY
