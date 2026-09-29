@@ -1,0 +1,55 @@
+# =============================================================================
+# ~/.config/snakemake/eddie/config.yaml
+# Snakemake profile for Eddie (SGE cluster)
+#
+# Place at: ~/.config/snakemake/eddie/config.yaml
+# Invoked via: snakemake --profile eddie
+# =============================================================================
+
+executor: sge
+jobs: 100                  # max concurrent SGE jobs submitted at once
+latency-wait: 60           # seconds to wait for output files after job ends (NFS latency)
+use-conda: true            # activate per-rule conda envs (envs/*.yaml)
+rerun-incomplete: true     # re-run jobs whose output files are incomplete
+keep-going: true           # continue submitting independent jobs if one fails
+
+# FIX 2026-09-29 — Snakemake 9's default scheduler ("ilp") solves an actual
+# ILP via pulp/CBC on every scheduling pass, which writes a temp .mps file
+# to $TMPDIR/local /tmp. Under the sge executor, EACH array task spawns its
+# own nested Snakemake sub-process on the compute node (--executor local
+# --mode remote) just to run that one target job — and that sub-process
+# still invokes the ilp scheduler for a job-selection problem that only
+# ever has exactly one candidate job. Confirmed real failure, twice:
+# Module 6 (2/16 linger_celltype_grn tasks) and Module 7 (64/104
+# linger_tf_activity_one tasks, the latter run at jobs:100 concurrency),
+# both crashing with "OSError: [Errno 28] No space left on device" inside
+# pulp/apis/coin_api.py's solve_CBC -> mps_lp.py's writeMPS, BEFORE the
+# rule's own shell command (and its `exec &> {log}` log file) ever ran —
+# confirmed via 64 empty 07a_tf_activity_*.log files across the Module 7
+# failures. Higher concurrency (100 vs 16 array tasks) made this far more
+# likely to occur (more simultaneous pulp/CBC temp-file writes racing for
+# the same node-local/shared temp space), not more likely to occur on any
+# one specific task.
+# Fix: "greedy" scheduling needs no ILP solver at all, and is strictly
+# sufficient here since a single-job remote-mode selection has nothing to
+# actually optimize over. Removes the failure mode entirely rather than
+# relocating it (e.g. via a bigger tmpdir).
+# NOTE: this repo's actual pipeline runs invoke `--profile profiles/eddie`
+# (the in-repo copy), not `--profile eddie` / this ~/.config copy — this
+# file is kept in sync in case it's ever used directly, but the fix that
+# mattered for the runs that actually failed was applied to the in-repo
+# profiles/eddie/config.yaml.
+scheduler: greedy
+
+# ---------------------------------------------------------------------------
+# Default resources applied to every job unless the rule overrides them.
+# NOTE: mem_mb is intentionally omitted — the snakemake-executor-plugin-sge
+# maps mem_mb to both h_vmem AND tmem; Eddie does not support tmem.
+# Memory is instead specified directly via sge_extra in each rule.
+# ---------------------------------------------------------------------------
+default-resources:
+  runtime: 240             # 4 hours; override in rules that need longer
+  threads: 1
+  mem_mb: 0
+  disk_mb: 0
+  sge_extra: "-V -l h_vmem=8000M"
