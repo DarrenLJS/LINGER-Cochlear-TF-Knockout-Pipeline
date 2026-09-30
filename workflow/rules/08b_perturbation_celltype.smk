@@ -89,29 +89,49 @@ wildcard_constraints:
 
 rule prep_pseudobulk_target_celltype:
     """Cell-type-restricted TG/RE pseudobulk — see script docstring. May
-    write nothing (exit 0) if the real post-shared-barcode cell count for
-    this cell type falls below --min-cells; the DAG-time filter above tries
+    write nothing (exit 0) if the real cell count for this cell type in
+    labeled.h5ad falls below --min-cells; the DAG-time filter above tries
     to avoid instantiating this rule for such a cell type in the first
-    place, but the runtime guard is the real enforcement."""
+    place, but the runtime guard is the real enforcement.
+
+    REWRITTEN 2026-09-30 — root-cause fix for the "every cell type fails
+    its own sanity check" incident (population sanity rho=0.805; all 14
+    cell types 0.09-0.33). This no longer calls LingerGRN.pseudo_bulk.
+    pseudo_bulk() on an isolated cell-type subset (that re-derives HVGs/
+    scaling/PCA/neighbor-graph from scratch, a different feature space
+    than the population run the nets were trained against — confirmed
+    against the real LingerGRN==1.110 source). It now just selects the
+    subset of Module 4's ALREADY-WRITTEN population pseudobulk columns
+    that belong to this cell type (pseudo_bulk() names each output column
+    after a real cell barcode, so this is a lossless, exact-feature-space
+    lookup, not an approximation). See prep_pseudobulk_target_celltype.py's
+    docstring for the full mechanism and the empirical confirmation run
+    2026-09-30 (394/394 barcodes resolved, zero ambiguity).
+
+    Input changed accordingly: depends on Module 4's pseudobulk.done
+    marker (guarantees data/TG_pseudobulk.tsv / data/RE_pseudobulk.tsv
+    exist) instead of the raw per-sample atac_consensus.h5ad files, which
+    this rule no longer reads at all."""
     input:
         labeled = f"{SCRATCH}/module3_integration/labeled.h5ad",
-        atac_consensus = expand(f"{SCRATCH}/{{sample}}/atac_consensus.h5ad", sample=SAMPLES),
+        pseudobulk_done = f"{MODULE4_DIR}/pseudobulk.done",
     output:
         tg = f"{MODULE8B_DIR}/{{pert_celltype}}/TG_pseudobulk_{{pert_celltype}}.tsv",
         re_ = f"{MODULE8B_DIR}/{{pert_celltype}}/RE_pseudobulk_{{pert_celltype}}.tsv",
     params:
-        sample_ids = SAMPLES,
+        population_pseudobulk_dir = MODULE4_DIR,
         min_cells = CT_MIN_CELLS,
         outdir = lambda wc: f"{MODULE8B_DIR}/{wc.pert_celltype}",
     log:
         f"{SCRATCH}/logs/08b_prep_pseudobulk_{{pert_celltype}}.log",
     resources:
-        # FIX 2026-09-18 — was reusing prep_pseudobulk_target's (16GB) resource
-        # block, sized for a lightweight file-read, not for this rule's real
-        # pseudo_bulk() call (same memory profile as linger_prep_pseudobulk,
-        # which needs 100GB — see config_eddie.yaml's prep_pseudobulk_target_
-        # celltype entry for the full incident writeup: 19/20 array tasks were
-        # SIGKILLed under the old 16GB cap, confirmed via empty per-rule logs).
+        # FIX 2026-09-30 — this rule is now a file read + column select
+        # (no pseudo_bulk() call, no HVG/PCA/neighbor-graph computation
+        # here anymore), so it no longer needs the 100GB/pseudo_bulk()-
+        # sized allocation the 2026-09-18 fix gave it. Left the resource
+        # block itself untouched for this rerun (correctness first,
+        # resource retuning is a separate, non-urgent follow-up) — it's
+        # oversized now, not undersized, so it will still run fine.
         runtime   = config["resources"]["prep_pseudobulk_target_celltype"]["runtime_min"],
         sge_extra = sge_extra("prep_pseudobulk_target_celltype"),
     shell:
@@ -123,8 +143,7 @@ rule prep_pseudobulk_target_celltype:
         export PYTHONHASHSEED=0
         {LINGER_PYTHON} workflow/scripts/prep_pseudobulk_target_celltype.py \
             --labeled {input.labeled} \
-            --atac-consensus {input.atac_consensus} \
-            --sample-ids {params.sample_ids} \
+            --population-pseudobulk-dir "{params.population_pseudobulk_dir}" \
             --celltype "{wildcards.pert_celltype}" \
             --min-cells {params.min_cells} \
             --output-dir "{params.outdir}"
