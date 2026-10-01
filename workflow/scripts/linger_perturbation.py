@@ -10,60 +10,56 @@ confirmed structurally incompatible with scNN's real training contract in
 three ways (see prep_pseudobulk_target.py's docstring and the pipeline
 README's Module 8 design notes for the full comparison).
 
-PER-GENE FORWARD PASS, replicated exactly from LINGER_tr.sc_nn_NN():
+PER-GENE FORWARD PASS, replicated from LINGER_tr.sc_nn_NN():
   TFtemp = Exp.drop([gene]).values   if gene is itself a TF, else Exp.values
   REtemp = Opn.loc[RE_TGlink[gene]].values
   inputs = vstack(TFtemp, REtemp)
-  inputs = per-row z-score normalized (mean/std computed live from THIS
-           call's inputs, across samples — dim=1) — this is also exactly
-           how perturb.py's own LINGER_simulation() re-normalizes at
-           inference time, confirmed from source, and it's the actual
-           mechanism by which a knockout propagates: zeroing a TF's row
-           makes its own normalized value ~0 (mean=0, std~eps) without
-           touching any other row's normalization, since normalization is
-           per-row/per-feature, not global.
+  inputs = per-row z-score across samples  (see NORMALIZATION below)
   y_pred = net(inputs.T)             where net = netall[gene_row_index],
                                       netall = torch.load({chr}_net.pt)
 
-KNOCKOUT MECHANICS: --tf-list zeroes the named TF row(s) in a COPY of the
-persisted Exp (from prep_pseudobulk_target.py) before the forward pass —
-nothing else changes. Multiple TFs (triple knockout) zero multiple rows
-in the same copy.
+NORMALIZATION (--norm-ref)  [REVISED 2026-10-01]
+  population (DEFAULT): every input row is z-scored with the mean/std of the
+      POPULATION pseudobulk row — exactly the statistics the nets were
+      trained against: z = (x - mu_pop) / (sd_pop + eps). A cell-type input
+      therefore lands where the net actually saw it during training, instead
+      of being re-centred on its own (narrower) per-subset distribution.
+      Confirmed by diag_a3: live per-subset z-scoring depressed the
+      cell-type sanity rho (Hair cell 0.32); population reference restores it.
+      For the population run itself the two choices are identical.
+  live (legacy): mean/std recomputed from THIS call's inputs, across the
+      samples passed in (v1 behaviour).
+  Rows whose population sd is <= eps are degenerate (constant in training,
+  so z was always 0): they are set to z = 0 and counted in the log.
+
+KNOCKOUT (--ko-mode)  [REVISED 2026-10-01]
+  training_zero (DEFAULT): the knocked-out TF's raw expression is set to 0 and
+      its z-score is (0 - mu_pop) / (sd_pop + eps), i.e. "this TF has zero
+      expression" as the net understands it. This is level-aware: a TF that
+      is highly expressed gets a large negative z, a TF that is not expressed
+      in the cell type (raw already ~0) is a true no-op.
+  legacy (v1): raw TF set to 0 and the row is re-normalised live; an
+      all-zero row has mean 0 and sd 0 so z = 0 (mean-clamp), which is
+      level-blind and amplifies near-zero rows to unit variance. Kept only
+      so v1 can be reproduced (--ko-mode legacy --norm-ref live).
 
 --sanity-check MODE (run this FIRST, before trusting any real knockout):
 runs the SAME forward pass with an UNMODIFIED Exp (no knockout) and
 reports Spearman correlation between predicted and real (Target) values
-for every gene that got a trained net. This is the only real check
-available for the TF-ordering risk flagged in prep_pseudobulk_target.py's
-docstring — a low correlation here means the reconstructed Exp ordering
-almost certainly does NOT match what population_training's nets were
-trained against, and knockout output from this pipeline should not be
-trusted until that's resolved (e.g. checking whether PYTHONHASHSEED was
-fixed in the LINGER conda env at training time).
+for every gene that got a trained net, plus a numeric gate
+(--gate-min-median-rho / --gate-min-frac-gt03). The gate is reported, not
+enforced here: Module 9b/11 read the same predicted file and give a scope
+that fails the gate confidence_weight 0.
 
-CELL-TYPE-RESOLVED MODE (--target-path/--opn-path, added 2026-09-16):
-The net's weights are population-trained (that can't change — one
-{chr}_net.pt per chromosome, shared), but nothing about the forward pass
-above requires the INPUT be population-pooled: normalization is recomputed
-live from whatever inputs this call receives, not from statistics baked in
-at training time. Passing --target-path/--opn-path swaps in a cell-type
-(or any other) pseudobulk instead of the default population one
-(WORKDIR/data/TG_pseudobulk.tsv / RE_pseudobulk.tsv).
-
+CELL-TYPE-RESOLVED MODE (--target-path/--opn-path):
 Exp for the substituted Target is built by REINDEXING to the exact TF row
-order in the persisted population Exp.tsv (Exp.reindex(...)), NOT by
-recomputing a fresh TFlist via set() intersection the way
-prep_pseudobulk_target.py does for the population case. This matters:
-re-deriving TFlist per cell type would reintroduce the exact
-PYTHONHASHSEED-dependent ordering risk the population run's sanity check
-(median rho=0.797) already worked around — reusing the population run's
-already-validated order is what keeps that validation applicable here.
+order in the persisted population Exp.tsv, NOT by recomputing a fresh TFlist
+via set() intersection (see prep_pseudobulk_target_celltype.py). A TF absent
+from a cell type's pseudobulk is "not detected", i.e. 0. REs absent from a
+cell type's Opn are likewise 0.
 
-Run --sanity-check in this mode too (against the cell-type Target, not the
-population one) before trusting any cell-type knockout output — the
-population sanity check does NOT establish that a cell type's narrower
-input distribution behaves in-distribution for a net trained on pooled
-population statistics. See prep_pseudobulk_target_celltype.py's docstring.
+Fail-loud input guards: a requested knockout TF that is not in the
+population TF list raises; NaN/empty predictions raise.
 """
 import argparse
 import ast
@@ -91,56 +87,44 @@ p.add_argument("--module8-dir", required=True, help="dir with Exp.tsv/RE_TGlink_
 p.add_argument("--ko-id", required=True)
 p.add_argument("--tf-list", nargs="*", default=[], help="TFs to zero. Empty list == sanity-check baseline (no knockout).")
 p.add_argument("--sanity-check", action="store_true",
-                help="Also compute predicted-vs-real correlation against Target — forces --tf-list to be ignored for scoring purposes (still applied to the forward pass if given).")
+                help="Also compute predicted-vs-real correlation against Target.")
 p.add_argument("--target-path", default=None,
                 help="Override Target pseudobulk (default: WORKDIR/data/TG_pseudobulk.tsv, population-level). "
                      "Pass a cell-type pseudobulk (see prep_pseudobulk_target_celltype.py) for cell-type-resolved mode.")
 p.add_argument("--opn-path", default=None,
                 help="Override Opn (RE accessibility) pseudobulk (default: WORKDIR/data/RE_pseudobulk.tsv, population-level).")
+p.add_argument("--pop-opn-path", default=None,
+                help="Population Opn used ONLY for the population normalisation statistics "
+                     "(default: WORKDIR/data/RE_pseudobulk.tsv).")
+p.add_argument("--norm-ref", choices=["population", "live"], default="population",
+                help="z-score reference: 'population' = training statistics (default); 'live' = v1 per-call statistics.")
+p.add_argument("--ko-mode", choices=["training_zero", "legacy"], default="training_zero",
+                help="knockout semantics: 'training_zero' (default) or v1 'legacy' mean-clamp (see docstring).")
+p.add_argument("--gate-min-median-rho", type=float, default=0.5)
+p.add_argument("--gate-min-frac-gt03", type=float, default=0.7)
 p.add_argument("--output-tsv", required=True)
 args = p.parse_args()
 
 WORKDIR = args.workdir
+eps = 1e-6
 
 # Persisted population Exp — always loaded, since its row (TF) order is what
-# every {chr}_net.pt was trained against and is reused below regardless of
-# which Target/Opn actually feed the forward pass.
+# every {chr}_net.pt was trained against and its row statistics are the
+# population normalisation reference.
 Exp_population = pd.read_csv(os.path.join(args.module8_dir, "Exp.tsv"), sep="\t", index_col=0)
 
 target_path = args.target_path or os.path.join(WORKDIR, "data", "TG_pseudobulk.tsv")
 opn_path = args.opn_path or os.path.join(WORKDIR, "data", "RE_pseudobulk.tsv")
 Opn = pd.read_csv(opn_path, sep=",", header=0, index_col=0)
 Target = pd.read_csv(target_path, sep=",", header=0, index_col=0)
+CELLTYPE_MODE = args.target_path is not None
 
-if args.target_path is None:
-    # Population mode, unchanged from before: Exp is the persisted file as-is.
+if not CELLTYPE_MODE:
     Exp = Exp_population
 else:
-    # Cell-type (or other substituted) mode: reindex to the population Exp's
-    # exact TF row order rather than recomputing a fresh set() intersection —
-    # see this script's docstring, CELL-TYPE-RESOLVED MODE, for why.
-    #
-    # FIX 2026-09-18 — CONFIRMED via direct forward-pass test (Pericyte,
-    # gene Mroh2a): leaving missing TFs as NaN after reindex() and letting
-    # them "break the forward pass" (the prior comment/behavior here) does
-    # not raise or crash — it silently poisons every prediction. net is a
-    # plain dense 3-layer MLP (Linear(617->64)->Linear(64->16)->Linear(16->1))
-    # with no masking, so a NaN in ANY of its ~617 input features (per-row
-    # z-score mean/std over a fully-NaN row stays NaN, and NaN propagates
-    # through every downstream matmul) makes the ENTIRE output NaN for
-    # every sample. pandas' DataFrame.to_csv() then writes those NaNs as
-    # empty cells (its default na_rep=""), not the literal text "nan" —
-    # so this was invisible to a text-based check of the output files.
-    # Verified empirically across all 20 cell-type-resolved cell types:
-    # every single sanity-check and knockout predicted_expression.tsv
-    # produced by this script to date was 100.0% NaN (120/120 files,
-    # confirmed via pandas .isna() on the actual outputs, 2026-09-18).
-    #
-    # Same underlying cause and same defensible fix as the RE side below:
-    # a TF absent from a cell type's pseudobulk means "not detected/
-    # expressed in this cell type", which is a legitimate 0, not an
-    # unknown that should be allowed to corrupt the whole forward pass.
-    # Reindex + fill 0, mirroring the RE fix, instead of leaving NaN.
+    # Reindex to the population Exp's exact TF row order; missing TFs are 0
+    # (not detected). Leaving NaN would silently poison every prediction
+    # (a NaN in any input feature propagates through the dense MLP).
     missing_tfs = [tf for tf in Exp_population.index if tf not in Target.index]
     if missing_tfs:
         print(f"WARNING: {len(missing_tfs)} of {len(Exp_population.index)} population TFs "
@@ -154,20 +138,57 @@ RE_TGlink = pd.read_csv(os.path.join(args.module8_dir, "RE_TGlink_resolved.tsv")
 re_col = [c for c in RE_TGlink.columns if c not in ("gene", "chr")][0]
 RE_TGlink[re_col] = RE_TGlink[re_col].apply(ast.literal_eval)
 
-print(f"--- {args.ko_id} (knockout TFs: {args.tf_list or '[none — baseline]'}) ---")
+print(f"--- {args.ko_id} (knockout TFs: {args.tf_list or '[none — baseline]'}) "
+      f"[ko-mode={args.ko_mode}, norm-ref={args.norm_ref}] ---")
 
-# Apply knockout to a COPY — Exp on disk is shared across every ko_id run.
-Exp_ko = Exp.copy()
-missing = [tf for tf in args.tf_list if tf not in Exp_ko.index]
+# ---- fail-loud knockout guard -------------------------------------------------
+missing = [tf for tf in args.tf_list if tf not in Exp.index]
 if missing:
-    print(f"WARNING: {missing} not found in Exp's TF list — cannot knock out, skipping these")
+    raise ValueError(f"knockout TF(s) {missing} are not in the population TF list "
+                     f"({Exp.shape[0]} TFs) — refusing to run a silent no-op knockout.")
+KO_SET = set(args.tf_list)
+
+# ---- population normalisation statistics -------------------------------------
+# TF rows: from the persisted population Exp (pre-knockout). RE rows: from the
+# population Opn, restricted to the REs actually used (chunked read keeps the
+# cell-type jobs from holding the whole population matrix in memory).
+needed_res = sorted({r for lst in RE_TGlink[re_col] for r in lst})
+
+def _row_stats(arr):
+    a = np.asarray(arr, dtype=np.float64)
+    return a.mean(axis=1), a.std(axis=1, ddof=1)
+
+tf_mu_all, tf_sd_all = _row_stats(Exp_population.values)
+
+re_mu = pd.Series(dtype=np.float64)
+re_sd = pd.Series(dtype=np.float64)
+if args.norm_ref == "population" or (args.ko_mode == "training_zero" and KO_SET):
+    if not CELLTYPE_MODE or (args.opn_path is None):
+        sub = Opn.reindex(needed_res).dropna(how="all")
+        m, s = _row_stats(sub.values)
+        re_mu, re_sd = pd.Series(m, index=sub.index), pd.Series(s, index=sub.index)
+    else:
+        pop_opn = args.pop_opn_path or os.path.join(WORKDIR, "data", "RE_pseudobulk.tsv")
+        need = set(needed_res)
+        mus, sds = [], []
+        for chunk in pd.read_csv(pop_opn, sep=",", header=0, index_col=0, chunksize=40000):
+            sub = chunk.loc[chunk.index.isin(need)]
+            if len(sub):
+                m, s = _row_stats(sub.values)
+                mus.append(pd.Series(m, index=sub.index)); sds.append(pd.Series(s, index=sub.index))
+        re_mu, re_sd = pd.concat(mus), pd.concat(sds)
+    re_mu = re_mu[~re_mu.index.duplicated()]
+    re_sd = re_sd[~re_sd.index.duplicated()]
+    print(f"population normalisation statistics: {len(tf_mu_all)} TF rows, {len(re_mu)} RE rows")
+
+# ---- apply knockout to a COPY (raw expression = 0) ----------------------------
+Exp_ko = Exp.copy()
 for tf in args.tf_list:
-    if tf in Exp_ko.index:
-        Exp_ko.loc[tf] = 0
+    Exp_ko.loc[tf] = 0
 
 predicted = {}  # gene -> np.array of predicted values across samples
 missing_nets = 0
-eps = 1e-6
+n_degenerate_rows = 0
 
 for chrom in sorted(RE_TGlink["chr"].unique()):
     net_path = os.path.join(WORKDIR, f"{chrom}_net.pt")
@@ -186,23 +207,13 @@ for chrom in sorted(RE_TGlink["chr"].unique()):
         re_list = chr_rows.loc[idx, re_col]
 
         if gene in Exp_ko.index:
-            TFtemp = Exp_ko.drop([gene]).values
+            keep = Exp_ko.index != gene
         else:
-            TFtemp = Exp_ko.values
-        # FIX 2026-09-18 — Opn.loc[re_list] crashed with a KeyError the moment
-        # ANY RE in re_list (population-level, from RE_TGlink_resolved.tsv)
-        # was absent from a cell-type-restricted Opn (prep_pseudobulk_target_
-        # celltype.py's pseudo_bulk() drops a peak column entirely when it has
-        # zero signal across every cell of that subset — it isn't kept as a
-        # zero row). Every real cell type's chromatin landscape is narrower
-        # than the pooled population's, so this hit every cell type, not just
-        # one (confirmed: Pericyte, 2026-09-18, KeyError on 26 chr1 peaks).
-        # Reindex + fill 0 instead of a strict .loc[] lookup — a peak absent
-        # from this cell type's pseudobulk means "no accessibility signal
-        # observed here", i.e. closed chromatin, which IS 0, not unknown.
-        # Mirrors the TF/Exp side's reindex-with-warning-and-fill-0 pattern
-        # above (both sides now treat a missing feature the same way: a
-        # defensible 0, not an unknown left to corrupt the forward pass).
+            keep = np.ones(Exp_ko.shape[0], dtype=bool)
+        TFtemp = Exp_ko.values[keep]
+        tf_names = Exp_ko.index[keep]
+        # A peak absent from a cell-type-restricted Opn means "no accessibility
+        # signal observed here" (closed chromatin) — 0, not unknown.
         re_series = Opn.reindex(re_list)
         missing_res = re_series.index[re_series.isna().any(axis=1)].tolist()
         if missing_res:
@@ -210,11 +221,29 @@ for chrom in sorted(RE_TGlink["chr"].unique()):
                   f"present in Opn ({opn_path}) — filling as 0 (no accessibility signal "
                   f"in this pseudobulk).")
         REtemp = re_series.fillna(0).values
-        inputs = np.vstack((TFtemp, REtemp))
-        inputs = torch.tensor(inputs, dtype=torch.float32)
-        mean = inputs.mean(dim=1)
-        std = inputs.std(dim=1)
-        inputs = ((inputs.T - mean) / (std + eps)).T
+        inputs = torch.tensor(np.vstack((TFtemp, REtemp)), dtype=torch.float32)
+
+        # population statistics for this gene's input rows (same row order)
+        if args.norm_ref == "population" or args.ko_mode == "training_zero":
+            mu_pop = np.concatenate([tf_mu_all[keep], re_mu.reindex(re_list).fillna(0.0).values])
+            sd_pop = np.concatenate([tf_sd_all[keep], re_sd.reindex(re_list).fillna(0.0).values])
+            mu_t = torch.tensor(mu_pop, dtype=torch.float32)
+            sd_t = torch.tensor(sd_pop, dtype=torch.float32)
+
+        if args.norm_ref == "population":
+            degenerate = sd_t <= eps
+            z = (inputs - mu_t[:, None]) / (sd_t[:, None] + eps)
+            z[degenerate] = 0.0
+            n_degenerate_rows += int(degenerate.sum())
+            inputs = z
+        else:
+            mean = inputs.mean(dim=1)
+            std = inputs.std(dim=1)
+            inputs = ((inputs.T - mean) / (std + eps)).T
+            if args.ko_mode == "training_zero" and KO_SET:
+                ko_rows = [i for i, n in enumerate(tf_names) if n in KO_SET]
+                if ko_rows:
+                    inputs[ko_rows] = ((0.0 - mu_t[ko_rows]) / (sd_t[ko_rows] + eps))[:, None]
 
         net = netall[idx]
         net.eval()
@@ -225,9 +254,16 @@ for chrom in sorted(RE_TGlink["chr"].unique()):
 if missing_nets:
     print(f"NOTE: {missing_nets} genes had no trained net for their chromosome "
           f"(sc_nn's own per-gene training-failure path) — excluded from output, not an error here.")
+if args.norm_ref == "population":
+    print(f"NOTE: {n_degenerate_rows} degenerate input rows (population sd <= eps) set to z=0 across all genes.")
 
+if not predicted:
+    raise RuntimeError("no gene produced a prediction — check net files / RE_TGlink_resolved.tsv")
 pred_df = pd.DataFrame(predicted).T
 pred_df.columns = Target.columns
+if pred_df.isna().any().any():
+    raise RuntimeError(f"{int(pred_df.isna().sum().sum())} NaN predictions — an input feature was NaN; "
+                       f"refusing to write a poisoned output.")
 pred_df.to_csv(args.output_tsv, sep="\t")
 print(f"Wrote {args.output_tsv}: {pred_df.shape[0]} genes x {pred_df.shape[1]} samples")
 
@@ -240,15 +276,23 @@ if args.sanity_check:
             rhos.append(rho)
     if rhos:
         rhos = np.array(rhos)
-        print(f"\nSANITY CHECK — predicted vs real Target, {len(rhos)} genes with a trained net:")
-        print(f"  median Spearman rho = {np.median(rhos):.3f}   "
-              f"mean = {rhos.mean():.3f}   "
-              f"frac rho>0.3 = {(rhos > 0.3).mean():.2f}")
-        print(f"  INTERPRETATION: this should be clearly positive and not close to 0 for a "
-              f"large majority of genes — these nets were fit to reproduce Target from this "
-              f"exact Exp/Opn input, so a low correlation here most likely means the "
-              f"reconstructed Exp/TF ordering (see prep_pseudobulk_target.py's docstring) "
-              f"does NOT match what {{chr}}_net.pt was actually trained against. Do not trust "
-              f"real knockout output from this pipeline until this reads clearly positive.")
+        med, frac = float(np.median(rhos)), float((rhos > 0.3).mean())
+        print(f"\nSANITY CHECK — predicted vs real Target, {len(rhos)} genes with a trained net, "
+              f"{pred_df.shape[1]} pseudo-samples:")
+        print(f"  median Spearman rho = {med:.3f}   mean = {rhos.mean():.3f}   frac rho>0.3 = {frac:.2f}")
+        ok = (med >= args.gate_min_median_rho) and (frac >= args.gate_min_frac_gt03)
+        print(f"  SANITY GATE (median rho >= {args.gate_min_median_rho}, frac rho>0.3 >= {args.gate_min_frac_gt03}): "
+              f"{'PASS' if ok else 'FAIL'}")
+        if CELLTYPE_MODE:
+            print("  INTERPRETATION: cell-type mode. The TF ordering is inherited from the population run, so a "
+                  "low value here points at the input distribution (this cell type's pseudobulk being far from "
+                  "what the nets were trained on) rather than at TF ordering. A scope that FAILS the gate is "
+                  "given confidence_weight 0 downstream; its numbers are not to be trusted.")
+        else:
+            print("  INTERPRETATION: these nets were fit to reproduce Target from this exact Exp/Opn input, so a "
+                  "low correlation here most likely means the reconstructed Exp/TF ordering (see "
+                  "prep_pseudobulk_target.py's docstring, and check PYTHONHASHSEED=0) does NOT match what "
+                  "{chr}_net.pt was trained against. Do not trust real knockout output until this passes.")
     else:
         print("\nSANITY CHECK: no overlapping genes scored — check Target/predicted gene name alignment.")
+        print("  SANITY GATE: FAIL")

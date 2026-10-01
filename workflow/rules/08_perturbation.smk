@@ -49,6 +49,24 @@ import re
 MODULE8_DIR = f"{SCRATCH}/module8_perturbation"
 KNOCKOUTS = config["perturbation"]["knockouts"]  # dict: ko_id -> [TF, TF, ...]
 
+# REVISED 2026-10-01 — forward-pass semantics (see linger_perturbation.py's
+# NORMALIZATION / KNOCKOUT docstring sections). Defaults are the corrected
+# behaviour; "legacy"/"live" exist only to reproduce v1 numbers.
+#   ko_mode  : training_zero | legacy
+#   norm_ref : population    | live
+# sanity_gate thresholds are REPORTED in each sanity log and re-read by
+# Module 9b/11 (a scope that fails gets confidence_weight 0); they never
+# abort a job.
+KO_MODE      = config["perturbation"].get("ko_mode", "training_zero")
+NORM_REF     = config["perturbation"].get("norm_ref", "population")
+_GATE        = config["perturbation"].get("sanity_gate", {})
+GATE_MIN_RHO  = _GATE.get("min_median_rho", 0.5)
+GATE_MIN_FRAC = _GATE.get("min_frac_rho_gt_0_3", 0.7)
+assert KO_MODE in ("training_zero", "legacy"), f"perturbation.ko_mode={KO_MODE!r}"
+assert NORM_REF in ("population", "live"), f"perturbation.norm_ref={NORM_REF!r}"
+PERTURB_FLAGS = (f"--ko-mode {KO_MODE} --norm-ref {NORM_REF} "
+                 f"--gate-min-median-rho {GATE_MIN_RHO} --gate-min-frac-gt03 {GATE_MIN_FRAC}")
+
 # FIX 2026-09-18 — AmbiguousRuleException between this rule's
 # linger_perturbation_ko and Module 8b's linger_perturbation_celltype_ko.
 # MODULE8B_DIR (08b_perturbation_celltype.smk) is nested directly inside
@@ -129,6 +147,7 @@ rule linger_perturbation_sanity_check:
             --ko-id _sanity_check_baseline \
             --tf-list \
             --sanity-check \
+            {PERTURB_FLAGS} \
             --output-tsv {output.pred}
         echo ""
         echo "=== Read the SANITY CHECK block above before trusting any real knockout output. ==="
@@ -168,6 +187,7 @@ rule linger_perturbation_ko:
             --module8-dir {params.module8_dir} \
             --ko-id {wildcards.ko_id} \
             --tf-list {params.tf_list} \
+            {PERTURB_FLAGS} \
             --output-tsv {output.pred}
         """
 

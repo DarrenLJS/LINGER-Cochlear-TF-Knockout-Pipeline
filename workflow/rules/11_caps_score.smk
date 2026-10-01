@@ -20,6 +20,12 @@
 # for (no Module 6 file) gets no CAPS rows either — same real on-disk check,
 # not re-derived here.
 #
+# REVISED 2026-10-01: unit-normalised aging projection, no-op gate, percentile
+# centrality, sanity-gated confidence, rank within scope, population-vector
+# sensitivity column (caps_popvec), PYTHONHASHSEED=0 on every regulon() call
+# (regulon() orders genes via list(set(...)), so its output otherwise
+# depends on the process hash seed). See compute_caps_score.py.
+#
 # NOTHING HERE RE-RUNS A FORWARD PASS OR RE-COMPUTES A GRN: every input is
 # an existing Module 6/8/8b/9/9b output, read as-is. See
 # compute_tf_activity_shift.py and compute_caps_score.py docstrings for the
@@ -32,6 +38,13 @@
 MODULE11_DIR = f"{SCRATCH}/module11_caps"
 
 CAPS_KO_IDS = list(KNOCKOUTS.keys())
+
+# REVISED 2026-10-01 — see compute_caps_score.py / aggregate_caps_scores.py.
+_CAPS_CFG = config.get("caps", {})
+CAPS_NOOP_L2 = _CAPS_CFG.get("noop_shift_l2", 1e-5)
+CAPS_CENTRALITY = _CAPS_CFG.get("centrality", "percentile")
+assert CAPS_CENTRALITY in ("percentile", "raw"), f"caps.centrality={CAPS_CENTRALITY!r}"
+CAPS_FLAGS = f"--noop-shift-l2 {CAPS_NOOP_L2} --centrality {CAPS_CENTRALITY}"
 
 wildcard_constraints:
     caps_ko_id = "|".join(re.escape(k) for k in CAPS_KO_IDS) if CAPS_KO_IDS else "(?!)",
@@ -61,6 +74,7 @@ rule caps_tf_activity_baseline_population:
         exec &> "{log}"
         export PATH="{LINGER_ENV_BIN}:$PATH"
         export LD_LIBRARY_PATH="{LINGER_ENV_LIB}:$LD_LIBRARY_PATH"
+        export PYTHONHASHSEED=0   # regulon() builds gene lists via list(set(...)) — hash-order dependent
         {LINGER_PYTHON} workflow/scripts/compute_tf_activity_shift.py \
             --workdir {params.workdir} \
             --grn-dir {params.grn_dir} \
@@ -92,6 +106,7 @@ rule caps_tf_activity_ko_population:
         exec &> "{log}"
         export PATH="{LINGER_ENV_BIN}:$PATH"
         export LD_LIBRARY_PATH="{LINGER_ENV_LIB}:$LD_LIBRARY_PATH"
+        export PYTHONHASHSEED=0   # regulon() builds gene lists via list(set(...)) — hash-order dependent
         {LINGER_PYTHON} workflow/scripts/compute_tf_activity_shift.py \
             --workdir {params.workdir} \
             --grn-dir {params.grn_dir} \
@@ -131,8 +146,10 @@ rule caps_score_population:
             --baseline-tf-activity-tsv "{input.baseline_tf_activity}" \
             --ko-tf-activity-tsv "{input.ko_tf_activity}" \
             --aging-shift-tsv "{input.aging_shift}" \
+            --population-aging-shift-tsv "{input.aging_shift}" \
             --trans-regulatory-tsv "{input.trans_regulatory}" \
             --validation-report-combined "{input.validation_report_combined}" \
+            {CAPS_FLAGS} \
             --output-tsv "{output}"
         """
 
@@ -161,6 +178,7 @@ rule caps_tf_activity_baseline_celltype:
         exec &> "{log}"
         export PATH="{LINGER_ENV_BIN}:$PATH"
         export LD_LIBRARY_PATH="{LINGER_ENV_LIB}:$LD_LIBRARY_PATH"
+        export PYTHONHASHSEED=0   # regulon() builds gene lists via list(set(...)) — hash-order dependent
         {LINGER_PYTHON} workflow/scripts/compute_tf_activity_shift.py \
             --workdir {params.workdir} \
             --grn-dir {params.grn_dir} \
@@ -193,6 +211,7 @@ rule caps_tf_activity_ko_celltype:
         exec &> "{log}"
         export PATH="{LINGER_ENV_BIN}:$PATH"
         export LD_LIBRARY_PATH="{LINGER_ENV_LIB}:$LD_LIBRARY_PATH"
+        export PYTHONHASHSEED=0   # regulon() builds gene lists via list(set(...)) — hash-order dependent
         {LINGER_PYTHON} workflow/scripts/compute_tf_activity_shift.py \
             --workdir {params.workdir} \
             --grn-dir {params.grn_dir} \
@@ -208,6 +227,7 @@ rule caps_score_celltype:
         baseline_tf_activity = f"{MODULE11_DIR}/{{caps_celltype}}/_baseline_tf_activity.tsv",
         ko_tf_activity = f"{MODULE11_DIR}/{{caps_celltype}}/{{caps_ko_id}}_tf_activity.tsv",
         aging_shift = f"{MODULE9B_DIR}/{{caps_celltype}}/{AGING_VECTOR_SAMPLE_ID}_aging_shift.tsv",
+        population_aging_shift = f"{MODULE9_DIR}/{AGING_VECTOR_SAMPLE_ID}_aging_shift.tsv",
         trans_regulatory = f"{SCRATCH}/module4_linger_init/cell_type_specific_trans_regulatory_{{caps_celltype}}.txt",
         validation_report_combined = f"{MODULE9B_DIR}/validation_report_combined.tsv",
     output:
@@ -232,8 +252,10 @@ rule caps_score_celltype:
             --baseline-tf-activity-tsv "{input.baseline_tf_activity}" \
             --ko-tf-activity-tsv "{input.ko_tf_activity}" \
             --aging-shift-tsv "{input.aging_shift}" \
+            --population-aging-shift-tsv "{input.population_aging_shift}" \
             --trans-regulatory-tsv "{input.trans_regulatory}" \
             --validation-report-combined "{input.validation_report_combined}" \
+            {CAPS_FLAGS} \
             --output-tsv "{output}"
         """
 

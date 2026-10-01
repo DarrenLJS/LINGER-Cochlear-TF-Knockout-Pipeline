@@ -1302,6 +1302,69 @@ held_out_inputs:
     # an empty gene intersection (real_shift: 0 genes) and a hard FAIL with
     # no computed statistics at all.
     symbol_column: gene_symbol
+    # REVISED 2026-10-01 — v1 averaged ALL 360 cells (control + GAP plate, WT +
+    # reprogrammed + unknown clusters) into one blended profile and diffed it
+    # against the cross-study population pseudobulk. Now a within-study
+    # contrast chosen by plate + cluster name (names copied exactly from the
+    # dataset's own GSE224627_CellID_ClusterID.csv.gz, spelling included):
+    #   plate Fbxo2     = control plate (no transgenes)
+    #   plate Fbxo2GAP  = Atoh1+Gfi1+Pou4f3 plate
+    # target   : GAP-plate "Reprogrammed Hair Cells" (51 cells)
+    # reference: control-plate WT Cells 1/2/3 + WT Supp Cells (158 cells)
+    # Excluded on purpose: the two "Unknown" clusters on both plates, the 15
+    # WT-labelled cells on the GAP plate (they carry leaky transgene
+    # expression), and 19 cells with no cluster label.
+    # self_check_up_genes must rise >= min_self_check_lfc (ln-CP10k) in the
+    # target group or the run stops — it proves the plate labels are what this
+    # block says they are (confirmed on the real data 2026-10-01: Atoh1
+    # 0 -> 7.7 CP10k, Gfi1 0.01 -> 1.84, Pou4f3 0 -> 5.4).
+    real_contrast:
+      cluster_file: GSE224627_CellID_ClusterID.csv.gz
+      matrix_file: GSE224627_Exon_UMI_matrix.txt.gz
+      symbol_column: gene_symbol
+      cell_column: Cell_ID
+      cluster_column: Cluster_names
+      plate_sep: "_"
+      target:
+        plate: Fbxo2GAP
+        clusters: ["Reprogrammed Hair Cells"]
+      reference:
+        plate: Fbxo2
+        clusters: ["WT Cells 1", "WT Cells 2", "WT Cells 3", "WT Supp Cells"]
+      self_check_up_genes: ["Atoh1", "Gfi1", "Pou4f3"]
+      min_self_check_lfc: 0.5
+      report_genes: ["Myo7a", "Myo6", "Sox2", "Fbxo2"]
+  # ADDED 2026-10-01 — secondary GAP contrast: the reprogrammed supporting-
+  # cell clusters against the same reference. Same triple_ko prediction.
+  # NB "Reprogammed Sup Cells 1" is the dataset's own (mis)spelling.
+  - sample_id: GSE224627_GAP_supporting_cell_secondary
+    dataset: GSE224627
+    path: "{multiome_root}/../06_held_out/GSE224627_GAP_reprogramming"
+    check: gap_supporting_cell_secondary
+    symbol_column: gene_symbol
+    real_contrast:
+      cluster_file: GSE224627_CellID_ClusterID.csv.gz
+      matrix_file: GSE224627_Exon_UMI_matrix.txt.gz
+      symbol_column: gene_symbol
+      cell_column: Cell_ID
+      cluster_column: Cluster_names
+      plate_sep: "_"
+      target:
+        plate: Fbxo2GAP
+        clusters: ["Reprogammed Sup Cells 1", "Reprogrammed Supp Cells 2"]
+      reference:
+        plate: Fbxo2
+        clusters: ["WT Cells 1", "WT Cells 2", "WT Cells 3", "WT Supp Cells"]
+      self_check_up_genes: ["Atoh1", "Gfi1", "Pou4f3"]
+      min_self_check_lfc: 0.5
+      report_genes: ["Myo7a", "Sox2", "Fbxo2"]
+  # REVISED 2026-10-01 — DESCRIPTIVE ONLY (09_validation.smk CHECK_SPECS:
+  # tbx2_conversion has scored=false). This dataset holds just two adult
+  # cell-type columns (P42 cIHC, P30 WT OHC): an IHC-vs-OHC identity contrast
+  # with no within-study control for a Tbx2 loss, so it cannot test a Tbx2
+  # knockout. The row is still computed and reported (cross-study fallback
+  # reference) but gets verdict "not_scored". Tbx2 is scored in the
+  # generalization track instead (GSE199369 P14_iOHC vs P14_WT IHC).
   - sample_id: GSE233559_Tbx2_OHC_IHC
     dataset: GSE233559
     path: "{multiome_root}/../06_held_out/GSE233559_Tbx2_OHC_IHC"
@@ -2189,10 +2252,14 @@ resources:
   # the smallest single-cluster cell type) fit. Give this rule its own
   # entry, mirroring linger_prep_pseudobulk's, rather than reusing a
   # sibling's much lighter one.
+  # RE-SIZED 2026-10-01 (100000 MB / 120 min -> 32000 MB / 60 min): since the
+  # 2026-09-30 rewrite this rule only reads Module 4's population pseudobulk
+  # and selects columns; the pseudo_bulk()-era allocation above is no longer
+  # needed.
   prep_pseudobulk_target_celltype:
     slots: 1
-    vmem_mb: 100000
-    runtime_min: 120
+    vmem_mb: 32000
+    runtime_min: 60
 
   # --- Module 9 ---
   validate_one:
@@ -2276,6 +2343,17 @@ resources:
 # for why Module 9 doesn't need one.
 # ---------------------------------------------------------------------------
 perturbation:
+  # REVISED 2026-10-01 — forward-pass semantics, see linger_perturbation.py.
+  #   ko_mode  : training_zero (default) | legacy   (v1 mean-clamp)
+  #   norm_ref : population    (default) | live     (v1 per-subset z-score)
+  # "legacy"+"live" reproduces the v1 predictions exactly (checked offline).
+  ko_mode: training_zero
+  norm_ref: population
+  # Numeric sanity gate, reported in every sanity log and re-read by 9b/11
+  # (a scope that fails it gets confidence_weight 0; nothing aborts).
+  sanity_gate:
+    min_median_rho: 0.5
+    min_frac_rho_gt_0_3: 0.7
   knockouts:
     atoh1_ko: ["Atoh1"]
     gfi1_ko: ["Gfi1"]
@@ -2294,3 +2372,20 @@ perturbation:
   celltype_knockouts:
     enabled_celltypes: "all"
     min_cells_for_pseudobulk: 100
+
+# ---------------------------------------------------------------------------
+# validation — Module 9/9b verdict parameters (ADDED 2026-10-01). See
+# validate_held_out.py's REVISED docstring block for the full rule.
+# ---------------------------------------------------------------------------
+validation:
+  bootstrap_n: 1000                    # gene-bootstrap resamples for the CI
+  bootstrap_seed: 0
+  min_excess_over_level_null: 0.05     # practical-significance bar on the excess rho
+  noop_pred_shift_sd: 1.0e-6           # predicted-shift SD below this => NOT_EVALUABLE
+
+# ---------------------------------------------------------------------------
+# caps — Module 11 parameters (ADDED 2026-10-01). See compute_caps_score.py.
+# ---------------------------------------------------------------------------
+caps:
+  noop_shift_l2: 1.0e-5                # ||TF-activity shift||_2 below this => CAPS NaN (status no_op)
+  centrality: percentile               # percentile (default) | raw (v1 summed column-sum)

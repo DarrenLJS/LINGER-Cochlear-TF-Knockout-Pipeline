@@ -24,6 +24,15 @@
 # extension on top of a first one that hasn't been checked against real
 # data yet.
 #
+# REVISED 2026-10-01: cell-type inputs are now z-scored with the POPULATION
+# row statistics the nets were trained on (--norm-ref population) and a
+# knockout means "raw expression 0" under those statistics (--ko-mode
+# training_zero) — see linger_perturbation.py. Each sanity log now ends with
+# a numeric SANITY GATE line; Module 9b/11 give a scope that fails the gate
+# confidence_weight 0 instead of aborting the DAG. The 14 scopes here are the
+# cell types with >= min_cells_for_pseudobulk cells (Hair cell immature and
+# Macrophage fall below it) — intentional.
+#
 # PER-CELL-TYPE SANITY CHECK IS MANDATORY, same discipline as Module 8's
 # population-level gate: the population sanity check does not establish
 # that a cell type's narrower input distribution is in-distribution for a
@@ -125,13 +134,10 @@ rule prep_pseudobulk_target_celltype:
     log:
         f"{SCRATCH}/logs/08b_prep_pseudobulk_{{pert_celltype}}.log",
     resources:
-        # FIX 2026-09-30 — this rule is now a file read + column select
-        # (no pseudo_bulk() call, no HVG/PCA/neighbor-graph computation
-        # here anymore), so it no longer needs the 100GB/pseudo_bulk()-
-        # sized allocation the 2026-09-18 fix gave it. Left the resource
-        # block itself untouched for this rerun (correctness first,
-        # resource retuning is a separate, non-urgent follow-up) — it's
-        # oversized now, not undersized, so it will still run fine.
+        # FIX 2026-09-30 — this rule is a file read + column select (no
+        # pseudo_bulk() call). RE-SIZED 2026-10-01: config's
+        # prep_pseudobulk_target_celltype block is now 32 GB / 60 min (it was
+        # the 100 GB / 120 min pseudo_bulk()-era allocation).
         runtime   = config["resources"]["prep_pseudobulk_target_celltype"]["runtime_min"],
         sge_extra = sge_extra("prep_pseudobulk_target_celltype"),
     shell:
@@ -182,6 +188,7 @@ rule linger_perturbation_celltype_sanity_check:
             --ko-id "_sanity_check_baseline_{wildcards.pert_celltype}" \
             --tf-list \
             --sanity-check \
+            {PERTURB_FLAGS} \
             --target-path "{input.tg}" \
             --opn-path "{input.re_}" \
             --output-tsv "{output.pred}"
@@ -223,6 +230,7 @@ rule linger_perturbation_celltype_ko:
             --module8-dir {params.module8_dir} \
             --ko-id "{wildcards.pert_celltype}_{wildcards.ko_id}" \
             --tf-list {params.tf_list} \
+            {PERTURB_FLAGS} \
             --target-path "{input.tg}" \
             --opn-path "{input.re_}" \
             --output-tsv "{output.pred}"

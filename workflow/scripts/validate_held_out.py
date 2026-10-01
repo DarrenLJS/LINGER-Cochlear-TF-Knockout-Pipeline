@@ -2,6 +2,56 @@
 validate_held_out.py — Module 9, one held-out/negative-control dataset's
 validation score.
 
+=============================================================================
+REVISED 2026-10-01 — read this block first; it supersedes the older text
+below wherever they disagree (the older text is kept as design history).
+=============================================================================
+For mode == "expression_shift" (reprogramming checks + negative control):
+  * SCALE. Both sides are now ln(1 + CP10k) — the scale Module 4's TG
+    pseudobulk (the nets' training Target) and therefore Module 8's
+    predictions live on. The real side is depth-normalised PER SAMPLE/CELL
+    (counts / total * 1e4, then ln1p) BEFORE averaging. v1 averaged raw
+    counts and then took log2(1 + mean), i.e. no depth normalisation and a
+    different log base/transform from the predictions.
+  * PREDICTED SHIFT = (mean KO prediction) - (mean model baseline) x sign,
+    where the model baseline is Module 8/8b's own
+    _sanity_check_baseline_predicted.tsv (--sanity-tsv), i.e. the SAME net
+    run without the knockout. v1 subtracted log2(1 + mean of the real
+    pseudobulk), a different quantity on a different scale, so ~99.9% of
+    v1's "predicted shift" was a knockout-independent gene-level term and
+    only `sign` distinguished one check from another.
+  * REAL SHIFT is always a within-study contrast:
+      - `real_contrast` on the entry (GSE224627): cell groups picked by plate
+        + cluster name from the dataset's own cluster file (see
+        _load_cell_contrast);
+      - else `--baseline-entry-json` (paired within-study control, e.g.
+        GSE281207 HET);
+      - else a cross-study fallback (population/cell-type TG pseudobulk) that
+        is allowed ONLY for checks with spec["scored"] == False (descriptive).
+  * VERDICT (replaces "rho > 0 and AUROC > 0.5"): gene-bootstrap CI (B =
+    --bootstrap-n, seed --bootstrap-seed) of the EXCESS Spearman rho over a
+    LEVEL-ONLY NULL (rho between the real shift and sign x the model's own
+    baseline level — what a predictor that knows nothing but gene level
+    achieves), judged against --min-excess:
+        positive check : PASS if excess CI lower bound  >  min_excess,
+                         FAIL if CI upper bound         <  min_excess,
+                         else INCONCLUSIVE
+        negative control (invert_pass): PASS if CI upper bound < min_excess,
+                         FAIL if CI lower bound > min_excess, else INCONCLUSIVE
+        NOT_EVALUABLE  if the predicted shift is (numerically) constant
+                         (SD < --noop-pred-sd: e.g. the knocked-out TF is not
+                         expressed in this scope) or < --min-genes genes
+                         overlap; not_scored if spec["scored"] is False.
+    The bootstrap resamples genes, which are not independent, so the CI is
+    optimistic; --min-excess is the practical-significance guard. AUROC/AUPR
+    are still reported as columns but no longer decide the verdict.
+For mode == "aging_tf_activity": unchanged logic, but the per-cell-type
+module (9b) now forwards the paired baseline too (see 09b smk) so the shift is
+a same-network old-vs-young contrast.
+=============================================================================
+
+(Original docstring follows.)
+
 Methodology per the HTML plan doc's Module 9 spec, taken at face value
 rather than invented from scratch:
   - Output: "Correlation metrics, AUROC/AUPR" (stated explicitly).
@@ -178,10 +228,20 @@ p.add_argument("--aging-vector-tsv", default=None,
                help="Only used when check_spec['aging_role']=='support': path to the "
                     "reference ('aging_vector') shift vector written via --output-shift-tsv.")
 p.add_argument("--baseline-tsv", default=None,
-               help="ADDED for Module 9b. Overrides the 'before' reference for "
-                    "mode=='expression_shift' (default: WORKDIR/data/TG_pseudobulk.tsv, "
-                    "population). Pass a cell type's own TG_pseudobulk_{celltype}.tsv for "
-                    "cell-type-resolved validation.")
+               help="REVISED 2026-10-01: only the cross-study FALLBACK real reference, and only "
+                    "for descriptive (spec['scored'] == False) expression_shift checks "
+                    "(default: WORKDIR/data/TG_pseudobulk.tsv; Module 9b passes the cell type's "
+                    "TG_pseudobulk_{celltype}.tsv). It is no longer used for the predicted shift.")
+p.add_argument("--sanity-tsv", default=None,
+               help="Module 8/8b _sanity_check_baseline_predicted.tsv — the model's own no-knockout "
+                    "baseline. REQUIRED for mode=='expression_shift' (predicted shift = KO - this).")
+p.add_argument("--bootstrap-n", type=int, default=1000)
+p.add_argument("--bootstrap-seed", type=int, default=0)
+p.add_argument("--min-excess", type=float, default=0.05,
+               help="minimum excess Spearman rho over the level-only null that counts as signal")
+p.add_argument("--noop-pred-sd", type=float, default=1e-6,
+               help="predicted-shift SD below this => NOT_EVALUABLE")
+p.add_argument("--min-genes", type=int, default=100)
 p.add_argument("--network", default="cell population",
                help="ADDED for Module 9b. Overrides the LingerGRN `network` arg to "
                     "TF_activity.regulon() for mode=='aging_tf_activity' (default: 'cell "
@@ -189,12 +249,6 @@ p.add_argument("--network", default="cell population",
                     "cell_type_specific_trans_regulatory_{network}.txt instead — a real "
                     "LingerGRN 1.110 code path, not a population-only special case.")
 args = p.parse_args()
-
-if args.baseline_entry_json and args.baseline_tsv:
-    raise ValueError(
-        "--baseline-entry-json and --baseline-tsv are mutually exclusive — pick one "
-        "baseline source (paired within-study control, or a fixed pseudobulk TSV)."
-    )
 
 entry = json.loads(args.entry_json)
 spec = json.loads(args.check_spec_json)
@@ -229,69 +283,220 @@ def _auroc_aupr(real_shift, predicted_shift, top_k):
     return roc_auc_score(labels, scores), average_precision_score(labels, scores), len(real)
 
 
+from scipy.stats import rankdata  # noqa: E402
+
+
+def _ln_cp10k_mean(adata, label):
+    """Per-sample depth normalisation, then mean over samples/cells.
+    counts/total*1e4 -> ln1p -> mean. Returns (Series over var_names, n_used)."""
+    X = adata.X
+    X = X.toarray() if hasattr(X, "toarray") else np.asarray(X)
+    X = np.asarray(X, dtype=np.float64)
+    X[X < 0] = 0
+    tot = X.sum(axis=1)
+    bad = tot <= 0
+    if bad.any():
+        print(f"[{label}] dropping {int(bad.sum())} sample(s)/cell(s) with zero total signal")
+        X, tot = X[~bad], tot[~bad]
+    if X.shape[0] == 0:
+        raise ValueError(f"[{label}] no usable samples after depth normalisation")
+    ln = np.log1p(X / tot[:, None] * 1e4)
+    print(f"[{label}] {X.shape[0]} sample(s)/cell(s), {X.shape[1]} genes; total-signal range "
+          f"{tot.min():.0f}-{tot.max():.0f}")
+    return pd.Series(ln.mean(axis=0), index=[str(g) for g in adata.var_names]), int(X.shape[0])
+
+
+def _load_cell_contrast(entry):
+    """real_contrast on the entry (GSE224627): two cell groups chosen by
+    plate + cluster name from the dataset's own cluster file. Fail-loud on any
+    name that does not exist, and on a plate/cluster assignment that does not
+    reproduce the biology it is supposed to carry (self-check genes must go UP
+    in the target group)."""
+    rc = entry["real_contrast"]
+    d = entry["path"]
+    cl = pd.read_csv(os.path.join(d, rc["cluster_file"]))
+    cell_col, clus_col = rc.get("cell_column", "Cell_ID"), rc.get("cluster_column", "Cluster_names")
+    X = pd.read_csv(os.path.join(d, rc["matrix_file"]), sep="\t", index_col=0)
+    sym_col = rc["symbol_column"]
+    if sym_col not in X.columns:
+        raise ValueError(f"symbol_column {sym_col!r} not in matrix columns {list(X.columns)[:5]}...")
+    sym = X.pop(sym_col).astype(str)
+    X = X.apply(pd.to_numeric, errors="coerce").fillna(0)
+    n_dup = int(sym.duplicated().sum())
+    X = X.groupby(sym.values).sum()  # duplicated symbols are SUMMED, not dropped
+    print(f"[contrast] matrix {X.shape[0]} unique symbols x {X.shape[1]} cells ({n_dup} duplicate symbol rows summed)")
+    sep = rc.get("plate_sep", "_")
+    cl["plate"] = cl[cell_col].astype(str).str.split(sep).str[0]
+
+    def _pick(group, name):
+        sub = cl[cl["plate"] == group["plate"]]
+        if sub.empty:
+            raise ValueError(f"[contrast:{name}] plate {group['plate']!r} not found; plates present: "
+                             f"{sorted(cl['plate'].unique())}")
+        have = set(sub[clus_col])
+        missing = [c for c in group["clusters"] if c not in have]
+        if missing:
+            raise ValueError(f"[contrast:{name}] cluster name(s) {missing} not found on plate "
+                             f"{group['plate']!r}. Present there: {sorted(have)}")
+        cells = sub.loc[sub[clus_col].isin(group["clusters"]), cell_col].tolist()
+        absent = [c for c in cells if c not in X.columns]
+        if absent:
+            raise ValueError(f"[contrast:{name}] {len(absent)} labelled cells missing from the matrix, e.g. {absent[:3]}")
+        print(f"[contrast:{name}] plate={group['plate']} clusters={group['clusters']} -> {len(cells)} cells")
+        return cells
+
+    t_cells, r_cells = _pick(rc["target"], "target"), _pick(rc["reference"], "reference")
+    if set(t_cells) & set(r_cells):
+        raise ValueError("[contrast] target and reference share cells")
+    mats = {}
+    for nm, cells in (("target", t_cells), ("reference", r_cells)):
+        a = ad_mod.AnnData(X=sp_mod.csr_matrix(X[cells].values.T))
+        a.var_names = list(X.index)
+        mats[nm] = _ln_cp10k_mean(a, f"contrast:{nm}")
+    (t_mean, n_t), (r_mean, n_r) = mats["target"], mats["reference"]
+    # biology self-check: the plate/cluster assignment must reproduce the
+    # transgene/hair-cell signature, otherwise the labels are not what the
+    # config says and every number downstream would be meaningless.
+    min_lfc = rc.get("min_self_check_lfc", 0.5)
+    for g in rc.get("self_check_up_genes", []):
+        if g not in t_mean.index:
+            raise ValueError(f"[contrast] self-check gene {g!r} absent from the matrix")
+        lfc = float(t_mean[g] - r_mean[g])
+        print(f"[contrast] self-check {g}: ln-CP10k target {t_mean[g]:.2f} vs reference {r_mean[g]:.2f} (lfc {lfc:+.2f})")
+        if lfc < min_lfc:
+            raise ValueError(f"[contrast] self-check FAILED for {g}: lfc {lfc:+.2f} < {min_lfc}. The target "
+                             f"group is not the reprogrammed population the config describes (plate labels "
+                             f"swapped?). Refusing to score.")
+    for g in rc.get("report_genes", []):
+        if g in t_mean.index:
+            print(f"[contrast] report {g}: lfc {float(t_mean[g] - r_mean[g]):+.2f}")
+    return t_mean, r_mean, n_t, n_r
+
+
+def _spearman(a, b):
+    ra, rb = rankdata(a), rankdata(b)
+    ra, rb = ra - ra.mean(), rb - rb.mean()
+    den = np.sqrt((ra ** 2).sum() * (rb ** 2).sum())
+    return float((ra * rb).sum() / den) if den > 0 else np.nan
+
+
+def _bootstrap_excess(real, pred, level, B, seed):
+    rng = np.random.default_rng(seed)
+    n = len(real)
+    rho_b, exc_b = np.empty(B), np.empty(B)
+    for i in range(B):
+        idx = rng.integers(0, n, n)
+        r = _spearman(real[idx], pred[idx])
+        nl = _spearman(real[idx], level[idx])
+        rho_b[i] = r
+        exc_b[i] = r - max(nl if np.isfinite(nl) else 0.0, 0.0)
+    ok = np.isfinite(exc_b)
+    return (np.percentile(rho_b[ok], [2.5, 97.5]), np.percentile(exc_b[ok], [2.5, 97.5]))
+
+
+def _verdict(scored, invert, evaluable, exc_lo, exc_hi, min_excess):
+    if not scored:
+        return "not_scored"
+    if not evaluable:
+        return "NOT_EVALUABLE"
+    if invert:
+        if exc_hi < min_excess:
+            return "PASS"
+        if exc_lo > min_excess:
+            return "FAIL"
+        return "INCONCLUSIVE"
+    if exc_lo > min_excess:
+        return "PASS"
+    if exc_hi < min_excess:
+        return "FAIL"
+    return "INCONCLUSIVE"
+
+
+extra = {}  # additional output columns for expression_shift rows
+
 if spec["mode"] == "expression_shift":
-    # --- real shift: held-out dataset's overall mean expression vs Module 4's population baseline ---
-    adata = load_rna_only(entry)
-    real_mean = pd.Series(
-        np.asarray(adata.X.mean(axis=0)).reshape(-1), index=adata.var_names
-    )
-    real_mean = np.log2(1 + real_mean.clip(lower=0))
+    import anndata as ad_mod
+    import scipy.sparse as sp_mod
 
-    # `predicted_baseline_mean` is what Module 8's predicted_expression.tsv
-    # is itself relative to (Module 4's population pseudobulk, or
-    # --baseline-tsv for Module 9b) — this must NEVER switch to the paired
-    # within-study control below, since Module 8 never saw that control
-    # when it generated the KO prediction; predicted_shift has to stay
-    # comparable to how it was produced regardless of which real dataset
-    # it's being checked against.
-    baseline_path = args.baseline_tsv or os.path.join(args.workdir, "data", "TG_pseudobulk.tsv")
-    baseline = pd.read_csv(baseline_path, sep=",", header=0, index_col=0)
-    predicted_baseline_mean = np.log2(1 + baseline.mean(axis=1).clip(lower=0))
-    print(f"predicted-shift baseline (Module 8-consistent): {baseline_path}")
+    scored = spec.get("scored", True)
+    if not args.sanity_tsv:
+        raise ValueError("mode=='expression_shift' requires --sanity-tsv (the model's own no-knockout baseline)")
 
-    if args.baseline_entry_json:
-        # `real_baseline_mean` is what THIS dataset's own real_shift is
-        # diffed against — a paired within-study control (e.g. GSE281207's
-        # own P21-HET) rather than the cross-study population baseline
-        # above, so real_shift is free of the cross-study batch confound.
-        baseline_entry = json.loads(args.baseline_entry_json)
-        baseline_adata = load_rna_only(baseline_entry)
-        real_baseline_mean = pd.Series(
-            np.asarray(baseline_adata.X.mean(axis=0)).reshape(-1), index=baseline_adata.var_names
-        )
-        real_baseline_mean = np.log2(1 + real_baseline_mean.clip(lower=0))
-        print(
-            f"real-shift baseline: paired within-study control "
-            f"sample_id={baseline_entry.get('sample_id') or baseline_entry.get('ref_id')!r} "
-            f"({baseline_adata.shape[0]} sample(s), {len(real_baseline_mean)} genes) — NOT "
-            f"the cross-study Module 4 population baseline"
-        )
+    # ---- real shift: ALWAYS a within-study contrast (or descriptive fallback) ----
+    if entry.get("real_contrast"):
+        t_mean, r_mean, n_t, n_r = _load_cell_contrast(entry)
+        real_reference = "within-study cell-group contrast (real_contrast)"
     else:
-        real_baseline_mean = predicted_baseline_mean
+        t_adata = load_rna_only(entry)
+        t_mean, n_t = _ln_cp10k_mean(t_adata, f"{sample_id}:target")
+        if args.baseline_entry_json:
+            b_entry = json.loads(args.baseline_entry_json)
+            b_adata = load_rna_only(b_entry)
+            r_mean, n_r = _ln_cp10k_mean(b_adata, f"{b_entry.get('sample_id') or b_entry.get('ref_id')}:paired-control")
+            real_reference = "paired within-study control"
+        else:
+            if scored:
+                raise ValueError(
+                    f"{sample_id}: a SCORED expression_shift check needs a within-study reference "
+                    f"(real_contrast or paired_baseline_entry). Refusing to fall back to a cross-study "
+                    f"pseudobulk — set check_spec['scored']=false to run it descriptively.")
+            baseline_path = args.baseline_tsv or os.path.join(args.workdir, "data", "TG_pseudobulk.tsv")
+            ref = pd.read_csv(baseline_path, sep=",", header=0, index_col=0)
+            r_mean, n_r = ref.mean(axis=1), int(ref.shape[1])
+            real_reference = f"CROSS-STUDY fallback ({os.path.basename(baseline_path)}) — descriptive only"
+    print(f"real reference: {real_reference}; n_target={n_t}, n_reference={n_r}")
+    common_genes = t_mean.index.intersection(r_mean.index)
+    real_shift = (t_mean.loc[common_genes] - r_mean.loc[common_genes])
+    print(f"real_shift: {len(real_shift)} genes (ln-CP10k units)")
 
-    common_genes = real_mean.index.intersection(real_baseline_mean.index)
-    real_shift = (real_mean.loc[common_genes] - real_baseline_mean.loc[common_genes])
-    baseline_desc = "paired within-study control" if args.baseline_entry_json else "population baseline"
-    print(f"real_shift: {len(real_shift)} genes (held-out {sample_id} vs {baseline_desc})")
-
+    # ---- predicted shift: KO minus the model's OWN baseline, same scale ----
     ko_id = spec["ko_id"]
     ko_path = os.path.join(args.module8_dir, f"{ko_id}_predicted_expression.tsv")
     ko_pred = pd.read_csv(ko_path, sep="\t", index_col=0)
-    ko_pred_mean = ko_pred.mean(axis=1)
-    predicted_shift = (ko_pred_mean - predicted_baseline_mean.reindex(ko_pred_mean.index)) * spec["sign"]
-    print(f"predicted_shift: {len(predicted_shift)} genes (Module 8 {ko_id}, sign={spec['sign']})")
+    base_pred = pd.read_csv(args.sanity_tsv, sep="\t", index_col=0)
+    genes_p = ko_pred.index.intersection(base_pred.index)
+    base_mean = base_pred.loc[genes_p].mean(axis=1)
+    predicted_shift = (ko_pred.loc[genes_p].mean(axis=1) - base_mean) * spec["sign"]
+    print(f"predicted_shift: {len(predicted_shift)} genes (KO {ko_id} - model baseline {os.path.basename(args.sanity_tsv)}, "
+          f"sign={spec['sign']}); SD={float(predicted_shift.std()):.3g}, max|.|={float(predicted_shift.abs().max()):.3g}")
 
     common = real_shift.index.intersection(predicted_shift.index)
     real_c, pred_c = real_shift.loc[common], predicted_shift.loc[common]
-    finite = real_c.notna() & pred_c.notna()
+    lvl_c = (base_mean.loc[common] * spec["sign"])
+    finite = real_c.notna() & pred_c.notna() & lvl_c.notna()
     if (~finite).sum():
-        print(f"spearman: dropping {int((~finite).sum())}/{len(finite)} NaN entries before correlating")
-    real_c, pred_c = real_c[finite], pred_c[finite]
-    if len(real_c) < 10:
-        rho, pval = np.nan, np.nan
-    else:
+        print(f"dropping {int((~finite).sum())}/{len(finite)} NaN entries before scoring")
+    real_c, pred_c, lvl_c = real_c[finite], pred_c[finite], lvl_c[finite]
+
+    pred_sd = float(pred_c.std()) if len(pred_c) > 1 else 0.0
+    evaluable = (len(real_c) >= args.min_genes) and (pred_sd >= args.noop_pred_sd)
+    if len(real_c) >= 10 and pred_sd > 0:
         rho, pval = spearmanr(real_c, pred_c)
+    else:
+        rho, pval = np.nan, np.nan
     auroc, aupr, n_common = _auroc_aupr(real_shift, predicted_shift, top_k)
+    n_common = len(real_c)
+
+    level_null, exc, exc_lo, exc_hi, rho_lo, rho_hi = (np.nan,) * 6
+    if evaluable:
+        level_null = _spearman(real_c.values, lvl_c.values)
+        exc = rho - max(level_null if np.isfinite(level_null) else 0.0, 0.0)
+        (rho_lo, rho_hi), (exc_lo, exc_hi) = _bootstrap_excess(
+            real_c.values, pred_c.values, lvl_c.values, args.bootstrap_n, args.bootstrap_seed)
+        print(f"rho={rho:.3f} [{rho_lo:.3f}, {rho_hi:.3f}]  level-only null rho={level_null:.3f}  "
+              f"excess={exc:.3f} [{exc_lo:.3f}, {exc_hi:.3f}] (min_excess={args.min_excess})")
+    else:
+        print(f"NOT EVALUABLE: n_genes={len(real_c)} (min {args.min_genes}), predicted-shift SD={pred_sd:.3g} "
+              f"(min {args.noop_pred_sd:g}) — the knockout has no effect in this scope")
+    verdict = _verdict(scored, spec.get("invert_pass", False), evaluable, exc_lo, exc_hi, args.min_excess)
+    print(f"VERDICT: {verdict}")
+    extra = {
+        "verdict": verdict, "n_real_target": n_t, "n_real_reference": n_r,
+        "real_reference": real_reference, "pred_shift_sd": pred_sd,
+        "rho_ci_lo": rho_lo, "rho_ci_hi": rho_hi, "level_null_rho": level_null,
+        "excess_rho": exc, "excess_ci_lo": exc_lo, "excess_ci_hi": exc_hi,
+        "min_excess": args.min_excess,
+    }
 
 elif spec["mode"] == "aging_tf_activity":
     # --- real: held-out dataset's own TF activity, via the same LingerGRN call Module 7 uses ---
@@ -400,5 +605,7 @@ result = {
     "auroc": auroc,
     "aupr": aupr,
 }
+result.update(extra)
+result.setdefault("verdict", "not_scored")
 pd.DataFrame([result]).to_csv(args.output_tsv, sep="\t", index=False)
 print(f"Wrote {args.output_tsv}: rho={rho}, auroc={auroc}, aupr={aupr}")

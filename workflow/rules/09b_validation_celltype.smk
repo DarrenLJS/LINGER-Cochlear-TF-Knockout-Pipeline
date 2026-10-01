@@ -13,6 +13,15 @@
 # the primary result — Module 9's validation_report.tsv is untouched by
 # this file.
 #
+# REVISED 2026-10-01 — v1 forwarded --baseline-entry-json in NONE of this
+# module's rules, so the Tmie negative control and every aging check were
+# scored against cross-study baselines (the aging baseline was a
+# POPULATION-network activity subtracted from a CELL-TYPE-network activity,
+# which is why every cell type's aging vector came out nearly identical, ~15x
+# larger than the population one). All rules now forward the paired baseline
+# exactly as Module 9 does, and --sanity-tsv (the scope's own no-knockout
+# baseline) is passed to the expression_shift checks.
+#
 # REUSES validate_held_out.py UNCHANGED in logic — only two new optional
 # CLI flags were added to it (--baseline-tsv, --network), both defaulting
 # to the exact population behavior Module 9 already relies on. See that
@@ -81,6 +90,17 @@ CELLTYPE_AGING_TYPES = _celltype_aging_types()
 CELLTYPE_KNOCKOUT_SAMPLE_IDS = OTHER_SAMPLE_IDS
 
 
+def _ct_baseline_entry_json(wildcards):
+    """Paired within-study control, forwarded exactly as Module 9 does. v1
+    Module 9b forwarded it for NONE of its rules: the Tmie negative control and
+    all five aging checks were scored against the cross-study Module 4 /
+    Module 7 baseline instead (and the aging baseline was a POPULATION-network
+    activity subtracted from a CELL-TYPE-network activity)."""
+    entry = _HELD_OUT_ENTRIES[wildcards.sample_id]
+    be = entry.get("paired_baseline_entry")
+    return _json9b.dumps(be) if be else ""
+
+
 def _ct_validation_inputs(wildcards):
     # NOTE: this is a function passed to `input: unpack(...)`, so it runs
     # per-job with a real `wildcards` object already bound — every path
@@ -119,6 +139,8 @@ rule validate_celltype_one:
         entry_json = _validation_entry_json,
         check_spec_json = _validation_check_spec_json,
         baseline_tsv = lambda wc: f"{MODULE8B_DIR}/{wc.pert_celltype}/TG_pseudobulk_{wc.pert_celltype}.tsv",
+        sanity_tsv = lambda wc: f"{MODULE8B_DIR}/{wc.pert_celltype}/_sanity_check_baseline_predicted.tsv",
+        baseline_entry_json = _ct_baseline_entry_json,
     log:
         f"{SCRATCH}/logs/09x_validate_celltype_{{pert_celltype}}_{{sample_id}}.log",
     resources:
@@ -130,6 +152,11 @@ rule validate_celltype_one:
         exec &> "{log}"
         export PATH="{LINGER_ENV_BIN}:$PATH"
         export LD_LIBRARY_PATH="{LINGER_ENV_LIB}:$LD_LIBRARY_PATH"
+        BASELINE_ENTRY_JSON={params.baseline_entry_json:q}
+        BASELINE_ENTRY_ARGS=()
+        if [ -n "$BASELINE_ENTRY_JSON" ]; then
+            BASELINE_ENTRY_ARGS=(--baseline-entry-json "$BASELINE_ENTRY_JSON")
+        fi
         {LINGER_PYTHON} workflow/scripts/validate_held_out.py \
             --workdir {params.workdir} \
             --grn-dir {params.grn_dir} \
@@ -139,7 +166,10 @@ rule validate_celltype_one:
             --entry-json {params.entry_json:q} \
             --check-spec-json {params.check_spec_json:q} \
             --baseline-tsv "{params.baseline_tsv}" \
-            --output-tsv "{output.score}"
+            --sanity-tsv "{params.sanity_tsv}" \
+            {VALIDATION_FLAGS} \
+            --output-tsv "{output.score}" \
+            "${{BASELINE_ENTRY_ARGS[@]}}"
         """
 
 
@@ -163,6 +193,9 @@ rule validate_celltype_aging_vector:
         module7_summary = f"{SCRATCH}/module7_tf_activity/tf_activity_summary.tsv",
         entry_json = _json9b.dumps(_HELD_OUT_ENTRIES[AGING_VECTOR_SAMPLE_ID]),
         check_spec_json = _json9b.dumps(CHECK_SPECS["aging_vector"]),
+        baseline_entry_json = _json9b.dumps(
+            _HELD_OUT_ENTRIES[AGING_VECTOR_SAMPLE_ID].get("paired_baseline_entry")
+        ) if _HELD_OUT_ENTRIES[AGING_VECTOR_SAMPLE_ID].get("paired_baseline_entry") else "",
     log:
         f"{SCRATCH}/logs/09x_validate_celltype_{{pert_celltype}}_{AGING_VECTOR_SAMPLE_ID}.log",
     resources:
@@ -174,6 +207,11 @@ rule validate_celltype_aging_vector:
         exec &> "{log}"
         export PATH="{LINGER_ENV_BIN}:$PATH"
         export LD_LIBRARY_PATH="{LINGER_ENV_LIB}:$LD_LIBRARY_PATH"
+        BASELINE_ENTRY_JSON={params.baseline_entry_json:q}
+        BASELINE_ENTRY_ARGS=()
+        if [ -n "$BASELINE_ENTRY_JSON" ]; then
+            BASELINE_ENTRY_ARGS=(--baseline-entry-json "$BASELINE_ENTRY_JSON")
+        fi
         {LINGER_PYTHON} workflow/scripts/validate_held_out.py \
             --workdir {params.workdir} \
             --grn-dir {params.grn_dir} \
@@ -184,7 +222,8 @@ rule validate_celltype_aging_vector:
             --check-spec-json {params.check_spec_json:q} \
             --network "{wildcards.pert_celltype}" \
             --output-tsv "{output.score}" \
-            --output-shift-tsv "{output.shift}"
+            --output-shift-tsv "{output.shift}" \
+            "${{BASELINE_ENTRY_ARGS[@]}}"
         """
 
 
@@ -206,6 +245,7 @@ rule validate_celltype_aging_support:
         module7_summary = f"{SCRATCH}/module7_tf_activity/tf_activity_summary.tsv",
         entry_json = lambda wildcards: _json9b.dumps(_HELD_OUT_ENTRIES[wildcards.sample_id]),
         check_spec_json = _json9b.dumps(CHECK_SPECS["aging_vector_support"]),
+        baseline_entry_json = _ct_baseline_entry_json,
     log:
         f"{SCRATCH}/logs/09x_validate_celltype_{{pert_celltype}}_{{sample_id}}.log",
     resources:
@@ -217,6 +257,11 @@ rule validate_celltype_aging_support:
         exec &> "{log}"
         export PATH="{LINGER_ENV_BIN}:$PATH"
         export LD_LIBRARY_PATH="{LINGER_ENV_LIB}:$LD_LIBRARY_PATH"
+        BASELINE_ENTRY_JSON={params.baseline_entry_json:q}
+        BASELINE_ENTRY_ARGS=()
+        if [ -n "$BASELINE_ENTRY_JSON" ]; then
+            BASELINE_ENTRY_ARGS=(--baseline-entry-json "$BASELINE_ENTRY_JSON")
+        fi
         {LINGER_PYTHON} workflow/scripts/validate_held_out.py \
             --workdir {params.workdir} \
             --grn-dir {params.grn_dir} \
@@ -227,7 +272,8 @@ rule validate_celltype_aging_support:
             --check-spec-json {params.check_spec_json:q} \
             --network "{wildcards.pert_celltype}" \
             --output-tsv "{output.score}" \
-            --aging-vector-tsv "{input.aging_vector_shift}"
+            --aging-vector-tsv "{input.aging_vector_shift}" \
+            "${{BASELINE_ENTRY_ARGS[@]}}"
         """
 
 
@@ -272,6 +318,8 @@ rule module9b_aggregate:
             --module8-dir {params.module8_dir} \
             --module8b-dir {params.module8b_dir} \
             --module4-data {params.module4_data} \
+            --gate-min-median-rho {GATE_MIN_RHO} \
+            --gate-min-frac-gt03 {GATE_MIN_FRAC} \
             --output-celltype-tsv {output.celltype_report} \
             --output-combined-tsv {output.combined_report}
         """

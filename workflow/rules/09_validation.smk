@@ -59,13 +59,32 @@ import re
 
 MODULE9_DIR = f"{SCRATCH}/module9_validation"
 
+# REVISED 2026-10-01 — see validate_held_out.py's REVISED docstring block.
+#   * scored: False  => the row is computed and reported (rho, AUROC, CI) but
+#     its verdict is "not_scored". tbx2_conversion is descriptive: GSE233559
+#     holds only two adult cell-type columns (P42 cIHC vs P30 WT OHC), a
+#     cell-identity contrast with no within-study control for a Tbx2 loss, so
+#     it cannot test a Tbx2 knockout. Tbx2 is scored in the generalization
+#     track instead.
+#   * gap_supporting_cell_secondary: same triple_ko prediction against the
+#     GSE224627 reprogrammed supporting-cell clusters (secondary contrast).
 CHECK_SPECS = {
     "atoh1_gfi1_pou4f3_overexpression": {"mode": "expression_shift", "ko_id": "triple_ko", "sign": -1, "invert_pass": False, "top_k": 200},
-    "tbx2_conversion":                  {"mode": "expression_shift", "ko_id": "tbx2_ko",   "sign": 1,  "invert_pass": False, "top_k": 200},
+    "gap_supporting_cell_secondary":    {"mode": "expression_shift", "ko_id": "triple_ko", "sign": -1, "invert_pass": False, "top_k": 200},
+    "tbx2_conversion":                  {"mode": "expression_shift", "ko_id": "tbx2_ko",   "sign": 1,  "invert_pass": False, "top_k": 200, "scored": False},
     "aging_vector":                     {"mode": "aging_tf_activity", "ko_id": None, "sign": None, "invert_pass": False, "top_k": 200, "aging_role": "reference"},
     "aging_vector_support":             {"mode": "aging_tf_activity", "ko_id": None, "sign": None, "invert_pass": False, "top_k": 200, "aging_role": "support"},
     "negative_control_must_not_reprogram": {"mode": "expression_shift", "ko_id": "triple_ko", "sign": -1, "invert_pass": True, "top_k": 200},
 }
+
+# Verdict parameters (config validation.*), forwarded to validate_held_out.py.
+_VCFG = config.get("validation", {})
+VALIDATION_FLAGS = (
+    f"--bootstrap-n {_VCFG.get('bootstrap_n', 1000)} "
+    f"--bootstrap-seed {_VCFG.get('bootstrap_seed', 0)} "
+    f"--min-excess {_VCFG.get('min_excess_over_level_null', 0.05)} "
+    f"--noop-pred-sd {_VCFG.get('noop_pred_shift_sd', 1e-6)}"
+)
 
 _HELD_OUT_ENTRIES = {e["sample_id"]: e for e in HELD_OUT_CFG}
 _HELD_OUT_ENTRIES[NEGATIVE_CONTROL_CFG["sample_id"]] = NEGATIVE_CONTROL_CFG
@@ -147,6 +166,10 @@ rule validate_one:
         entry_json = _validation_entry_json,
         check_spec_json = _validation_check_spec_json,
         baseline_entry_json = _validation_baseline_entry_json,
+        sanity_tsv = lambda wc: (
+            f"{SCRATCH}/module8_perturbation/_sanity_check_baseline_predicted.tsv"
+            if CHECK_SPECS[_HELD_OUT_ENTRIES[wc.sample_id]["check"]]["ko_id"] else ""
+        ),
     log:
         f"{SCRATCH}/logs/09a_validate_{{sample_id}}.log",
     resources:
@@ -163,6 +186,10 @@ rule validate_one:
         if [ -n "$BASELINE_ENTRY_JSON" ]; then
             BASELINE_ENTRY_ARGS=(--baseline-entry-json "$BASELINE_ENTRY_JSON")
         fi
+        SANITY_ARGS=()
+        if [ -n "{params.sanity_tsv}" ]; then
+            SANITY_ARGS=(--sanity-tsv "{params.sanity_tsv}")
+        fi
         {LINGER_PYTHON} workflow/scripts/validate_held_out.py \
             --workdir {params.workdir} \
             --grn-dir {params.grn_dir} \
@@ -171,7 +198,9 @@ rule validate_one:
             --module7-summary {params.module7_summary} \
             --entry-json {params.entry_json:q} \
             --check-spec-json {params.check_spec_json:q} \
+            {VALIDATION_FLAGS} \
             --output-tsv {output.score} \
+            "${{SANITY_ARGS[@]}}" \
             "${{BASELINE_ENTRY_ARGS[@]}}"
         """
 
