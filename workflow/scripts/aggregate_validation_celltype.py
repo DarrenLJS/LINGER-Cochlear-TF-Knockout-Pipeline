@@ -188,6 +188,7 @@ combined_cols = [
     "n_real_target", "n_real_reference", "pred_shift_sd",
     "sanity_rho", "sanity_frac_gt03", "sanity_n_samples", "sanity_pass",
     "structure_rho", "aging_vec_pop_rho", "aging_vec_scale",
+    "null_n", "null_median_rho", "null_p95_rho", "null_pctile", "verdict_basis",
     "verdict", "pass_fail",
 ]
 combined = pd.concat(

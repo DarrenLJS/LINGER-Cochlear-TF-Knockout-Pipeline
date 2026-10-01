@@ -45,6 +45,22 @@ For mode == "expression_shift" (reprogramming checks + negative control):
     The bootstrap resamples genes, which are not independent, so the CI is
     optimistic; --min-excess is the practical-significance guard. AUROC/AUPR
     are still reported as columns but no longer decide the verdict.
+EMPIRICAL NULL FROM THE ALL-TF SCREEN (ADDED 2026-10-01, optional, --null-screen-dir):
+  Module 8c knocks out (or overexpresses) every TF one at a time. When its
+  output dir is given, the Spearman rho of THIS check's predicted shift is placed
+  among the rhos of all usable single-TF perturbations of the same mode (variants
+  that are not no-ops, whose TF has a network column, and whose TF is not one of
+  this check's own --null-exclude-tfs). Reported: null_n, null_median_rho,
+  null_p95_rho, null_pctile (= fraction of the null with a LOWER rho than this
+  check's), verdict_basis.
+    * negative control (invert_pass): verdict becomes PASS if null_pctile <
+      --null-pctile-max (default 0.95) else FAIL; verdict_basis = "empirical_null".
+      The fixed --min-excess bar no longer decides it.
+    * positive checks: verdict unchanged (bootstrap excess); null_pctile is
+      reported as supporting evidence.
+  Caveat: a multi-TF check (the triple knockout) is compared with SINGLE-TF
+  nulls. Spearman is scale-free so the magnitude difference does not matter, but
+  the null is not a matched-size null.
 For mode == "aging_tf_activity": unchanged logic, but the per-cell-type
 module (9b) now forwards the paired baseline too (see 09b smk) so the shift is
 a same-network old-vs-young contrast.
@@ -242,6 +258,12 @@ p.add_argument("--min-excess", type=float, default=0.05,
 p.add_argument("--noop-pred-sd", type=float, default=1e-6,
                help="predicted-shift SD below this => NOT_EVALUABLE")
 p.add_argument("--min-genes", type=int, default=100)
+p.add_argument("--null-screen-dir", default=None,
+               help="Module 8c output dir for this scope (chunk_*_shift.tsv.gz + screen_status.tsv); enables the empirical null")
+p.add_argument("--null-mode", choices=["ko", "oe"], default="ko", help="which screen variants form the null")
+p.add_argument("--null-exclude-tfs", nargs="*", default=[], help="TFs of THIS check, left out of the null")
+p.add_argument("--null-pctile-max", type=float, default=0.95,
+               help="negative control passes if its rho is below this percentile of the null")
 p.add_argument("--network", default="cell population",
                help="ADDED for Module 9b. Overrides the LingerGRN `network` arg to "
                     "TF_activity.regulon() for mode=='aging_tf_activity' (default: 'cell "
@@ -412,6 +434,31 @@ def _verdict(scored, invert, evaluable, exc_lo, exc_hi, min_excess):
     return "INCONCLUSIVE"
 
 
+def _screen_null_rhos(screen_dir, mode, exclude, real_c, sign):
+    """Spearman(real_c, sign * single-TF screen shift) for every usable variant of
+    `mode` not in `exclude`. -> (np.array of finite rhos, n_variants_considered)."""
+    import glob
+    st = pd.read_csv(os.path.join(screen_dir, "screen_status.tsv"), sep="\t")
+    keep = st[(st["mode"] == mode) & (st["usable"].astype(bool)) & (~st["tf"].isin(exclude))]
+    ids = set(keep["variant"])
+    chunk_files = sorted(glob.glob(os.path.join(screen_dir, "chunk_*_shift.tsv.gz")))
+    if not chunk_files:
+        raise ValueError(f"{screen_dir}: screen_status.tsv exists but no chunk_*_shift.tsv.gz files")
+    rhos = []
+    for f in chunk_files:
+        df = pd.read_csv(f, sep="\t", index_col=0)
+        cols = [c for c in df.columns if c in ids]
+        if not cols:
+            continue
+        common = real_c.index.intersection(df.index)
+        r = real_c.loc[common].values
+        for c in cols:
+            v = _spearman(r, df.loc[common, c].values * sign)
+            if np.isfinite(v):
+                rhos.append(v)
+    return np.array(rhos), len(ids)
+
+
 extra = {}  # additional output columns for expression_shift rows
 
 if spec["mode"] == "expression_shift":
@@ -489,13 +536,32 @@ if spec["mode"] == "expression_shift":
         print(f"NOT EVALUABLE: n_genes={len(real_c)} (min {args.min_genes}), predicted-shift SD={pred_sd:.3g} "
               f"(min {args.noop_pred_sd:g}) — the knockout has no effect in this scope")
     verdict = _verdict(scored, spec.get("invert_pass", False), evaluable, exc_lo, exc_hi, args.min_excess)
-    print(f"VERDICT: {verdict}")
+    verdict_basis = "bootstrap_excess"
+    null_n, null_median, null_p95, null_pct = np.nan, np.nan, np.nan, np.nan
+    if args.null_screen_dir and evaluable:
+        null_rhos, n_ids = _screen_null_rhos(args.null_screen_dir, args.null_mode, set(args.null_exclude_tfs),
+                                             real_c, spec["sign"])
+        if len(null_rhos) < 20:
+            raise ValueError(f"empirical null has only {len(null_rhos)} usable variants ({n_ids} considered) — "
+                             f"too few to be a null; check {args.null_screen_dir}/screen_status.tsv")
+        null_n = int(len(null_rhos))
+        null_median = float(np.median(null_rhos))
+        null_p95 = float(np.percentile(null_rhos, 95))
+        null_pct = float((null_rhos < rho).mean())
+        print(f"empirical null ({args.null_mode} screen, {null_n} single-TF perturbations): median rho={null_median:.3f}, "
+              f"95th pct={null_p95:.3f}; this check's rho={rho:.3f} sits at percentile {null_pct:.3f}")
+        if scored and spec.get("invert_pass", False):
+            verdict = "PASS" if null_pct < args.null_pctile_max else "FAIL"
+            verdict_basis = "empirical_null"
+    print(f"VERDICT: {verdict} (basis: {verdict_basis})")
     extra = {
         "verdict": verdict, "n_real_target": n_t, "n_real_reference": n_r,
         "real_reference": real_reference, "pred_shift_sd": pred_sd,
         "rho_ci_lo": rho_lo, "rho_ci_hi": rho_hi, "level_null_rho": level_null,
         "excess_rho": exc, "excess_ci_lo": exc_lo, "excess_ci_hi": exc_hi,
         "min_excess": args.min_excess,
+        "null_n": null_n, "null_median_rho": null_median, "null_p95_rho": null_p95,
+        "null_pctile": null_pct, "verdict_basis": verdict_basis,
     }
 
 elif spec["mode"] == "aging_tf_activity":

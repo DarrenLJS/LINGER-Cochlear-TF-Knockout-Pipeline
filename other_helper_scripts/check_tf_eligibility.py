@@ -35,8 +35,23 @@ plain TSV, so any Python with pandas works. Needs Module 8's Exp.tsv to
 already exist, which needs Modules 4/6 (LINGER init + GRN training) to have
 run at least once first.
 
+ADDED 2026-10-01 — PER-SCOPE CHECK (--scratch): being a row in Exp.tsv is
+necessary but not sufficient. Under --ko-mode training_zero a knockout of a TF
+that is NOT expressed in a scope is an exact no-op there (Supporting cell GAP is
+the real example), and a TF with no (or an all-zero) column in the
+trans-regulatory matrix has undefined TF activity. With --scratch (the
+pipeline's `preprocessed` dir) this also writes tf_eligibility_by_scope.tsv:
+one row per (gene, scope) with in_network (column present and, for the
+population matrix, non-zero), mean_expr / frac_samples_expressed from that
+scope's TG pseudobulk, expressed_in_scope (mean_expr > --min-mean-expr, a
+JUDGMENT-CALL threshold: read the numbers, not just the flag), ko_noop_expected
+(= not expressed_in_scope) and oe_possible (= in_network). OE of an unexpressed
+TF is NOT a no-op, so only the knockout is blocked by non-expression.
+
 Usage:
     python check_tf_eligibility.py --module8-dir /path/to/module8_output_dir
+    # per-scope table too:
+    python check_tf_eligibility.py --module8-dir $SCRATCH/module8_perturbation --scratch $SCRATCH
     # writes tf_eligibility_report.tsv and prints a per-gene verdict
 
     # to check a different/extra gene list:
@@ -76,7 +91,14 @@ def main():
     ap.add_argument("--genes", nargs="*", default=DEFAULT_GENES,
                      help="Candidate gene symbols to check (default: see script header)")
     ap.add_argument("--out", default="tf_eligibility_report.tsv")
+    ap.add_argument("--scratch", default=None,
+                     help="pipeline `preprocessed` dir; enables the per-scope table")
+    ap.add_argument("--scope-out", default="tf_eligibility_by_scope.tsv")
+    ap.add_argument("--min-mean-expr", type=float, default=0.05,
+                     help="mean ln-CP10k pseudobulk expression above which a TF counts as expressed in a "
+                          "scope (judgment call; the numbers are reported too)")
     args = ap.parse_args()
+    args.genes = list(dict.fromkeys(args.genes))   # keep order, drop repeats
 
     exp_path = os.path.join(args.module8_dir, "Exp.tsv")
     if not os.path.exists(exp_path):
@@ -137,6 +159,51 @@ def main():
     print(f"{n_check}/{len(rows)} CASING_MISMATCH_CHECK_MANUALLY (found under a different "
           f"case — open {args.out} and confirm by eye before treating as eligible).")
     print(f"Wrote {args.out}")
+
+    if args.scratch:
+        per_scope(args, exact_set)
+
+
+def per_scope(args, exact_set):
+    import glob
+    w = os.path.join(args.scratch, "module4_linger_init")
+    scopes = {"population": (os.path.join(w, "data", "TG_pseudobulk.tsv"),
+                             os.path.join(w, "cell_population_trans_regulatory.txt"))}
+    for tg in sorted(glob.glob(os.path.join(args.scratch, "module8_perturbation", "celltype", "*",
+                                             "TG_pseudobulk_*.tsv"))):
+        ct = os.path.basename(os.path.dirname(tg))
+        scopes[ct] = (tg, os.path.join(w, f"cell_type_specific_trans_regulatory_{ct}.txt"))
+    rows = []
+    zero_cols = set()
+    for scope, (tg_path, tr_path) in scopes.items():
+        if not (os.path.exists(tg_path) and os.path.exists(tr_path)):
+            print(f"[skip {scope}] missing {tg_path if not os.path.exists(tg_path) else tr_path}")
+            continue
+        tg = pd.read_csv(tg_path, sep=",", header=0, index_col=0)
+        if scope == "population":
+            tr = pd.read_csv(tr_path, sep="\t", index_col=0)
+            net_cols = set(tr.columns)
+            zero_cols = set(tr.columns[(tr.abs().sum(axis=0) == 0).values])
+        else:
+            net_cols = set(pd.read_csv(tr_path, sep="\t", index_col=0, nrows=0).columns)  # header only
+        for gene in args.genes:
+            in_net = (gene in net_cols) and (gene not in zero_cols if scope == "population" else True)
+            if gene in tg.index:
+                row = tg.loc[gene].astype(float)
+                mean_e, frac = float(row.mean()), float((row > 0).mean())
+            else:
+                mean_e, frac = float("nan"), float("nan")
+            expressed = bool(in_net and mean_e > args.min_mean_expr) if mean_e == mean_e else False
+            rows.append({"gene": gene, "scope": scope, "in_exp_index": gene in exact_set,
+                         "in_network": in_net, "mean_expr": mean_e, "frac_samples_expressed": frac,
+                         "expressed_in_scope": expressed, "ko_noop_expected": not expressed,
+                         "oe_possible": in_net})
+    out = pd.DataFrame(rows)
+    out.to_csv(args.scope_out, sep="\t", index=False)
+    print(f"\nWrote {args.scope_out}: {len(out)} (gene, scope) rows over {out['scope'].nunique()} scopes.")
+    piv = out.pivot(index="gene", columns="scope", values="expressed_in_scope")
+    print("expressed_in_scope (True = knockout is NOT a no-op there):")
+    print(piv.to_string())
 
 
 if __name__ == "__main__":

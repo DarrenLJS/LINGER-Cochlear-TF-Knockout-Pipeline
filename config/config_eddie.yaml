@@ -2229,13 +2229,31 @@ resources:
 
   linger_perturbation_ko:
     slots: 1
-    vmem_mb: 32000        # torch.load()'s one chromosome's netall dict at a
-                          # time, not the whole genome at once — 32GB is
-                          # headroom, not a measured requirement
-    runtime_min: 240      # unmeasured — per-gene forward passes across all
-                          # chromosomes, no training involved so should be
-                          # much faster than linger_population_training's
-                          # 4h+, but not benchmarked yet
+    vmem_mb: 32000        # POPULATION jobs (394 samples, full RE_pseudobulk.tsv). UNMEASURED —
+                          # kept at the old value on purpose; tighten after running
+                          # `qacct` on a linger_perturbation_ko_* job.
+    runtime_min: 240
+
+  # ADDED 2026-10-01 — Module 8b (cell-type) KO/sanity jobs, right-sized from qacct:
+  # 40+ jobs (23 pseudo-samples) peaked at 5.2-5.3 GB maxvmem and ran 49-61 s.
+  # Set above those numbers with headroom, not to them.
+  linger_perturbation_celltype_ko:
+    slots: 1
+    vmem_mb: 10000
+    runtime_min: 45
+
+  # ADDED 2026-10-01 — Module 8c all-TF screen. FIRST GUESS, unmeasured: one
+  # chunk runs (1 + ~58) forward variants per gene. Run ONE chunk first, read its
+  # [timing] lines, then size the rest.
+  tf_screen_chunk:
+    slots: 1
+    vmem_mb: 16000
+    runtime_min: 360
+
+  tf_screen_summarise:
+    slots: 1
+    vmem_mb: 4000
+    runtime_min: 15
 
   # Added 2026-09-18 — prep_pseudobulk_target_celltype (08b_perturbation_
   # celltype.smk) was reusing prep_pseudobulk_target's resources above
@@ -2354,12 +2372,27 @@ perturbation:
   sanity_gate:
     min_median_rho: 0.5
     min_frac_rho_gt_0_3: 0.7
+  # ADDED 2026-10-01 — overexpression: the perturbed TF's raw expression is
+  # raised, per sample, to max(own value, this quantile of the TF's POPULATION
+  # row) — model-capped, level-aware (see linger_perturbation.py).
+  oe_quantile: 0.99
+  # knockouts entries: the old list form (== knockout) or {tfs: [...], mode: ko|oe}.
+  # The five original ids keep the list form. New 2026-10-01: pknox2_ko (the one
+  # new generalisation-panel gene), and OE ids for the panel / TF screen (CAPS
+  # ignores them unless caps.include_modes lists "oe"). Casz1, Zbtb20, Prdm16 are
+  # not in the trained network (descriptive-only, no entry); Notch1/Ctnnb1 dropped.
   knockouts:
     atoh1_ko: ["Atoh1"]
     gfi1_ko: ["Gfi1"]
     pou4f3_ko: ["Pou4f3"]
     triple_ko: ["Atoh1", "Gfi1", "Pou4f3"]
     tbx2_ko: ["Tbx2"]
+    pknox2_ko: {tfs: ["Pknox2"], mode: ko}
+    atoh1_oe: {tfs: ["Atoh1"], mode: oe}
+    gfi1_oe: {tfs: ["Gfi1"], mode: oe}
+    pou4f3_oe: {tfs: ["Pou4f3"], mode: oe}
+    triple_oe: {tfs: ["Atoh1", "Gfi1", "Pou4f3"], mode: oe}
+    tbx2_oe: {tfs: ["Tbx2"], mode: oe}
   # Module 8b (08b_perturbation_celltype.smk), added 2026-09-16.
   # enabled_celltypes: "all" runs every cell type from cluster_annotation.tsv
   # that clears min_cells_for_pseudobulk; set to an explicit list (e.g.
@@ -2378,6 +2411,15 @@ perturbation:
 # validate_held_out.py's REVISED docstring block for the full rule.
 # ---------------------------------------------------------------------------
 validation:
+  # ADDED 2026-10-01 — empirical null from the Module 8c all-TF screen. When true,
+  # Module 9 (population) / 9b (a cell type, only if that scope is in
+  # tf_screen.scopes) take the screen's shifts as inputs and report where this
+  # check's rho sits among the single-TF knockouts' rho (null_pctile). For the
+  # NEGATIVE control the verdict then uses that percentile (PASS if below
+  # null_pctile_max); positive checks keep the bootstrap verdict. Leave false
+  # until module8c_all has been run — true makes Module 9 depend on the screen.
+  null_from_screen: false
+  null_pctile_max: 0.95
   bootstrap_n: 1000                    # gene-bootstrap resamples for the CI
   bootstrap_seed: 0
   min_excess_over_level_null: 0.05     # practical-significance bar on the excess rho
@@ -2386,6 +2428,25 @@ validation:
 # ---------------------------------------------------------------------------
 # caps — Module 11 parameters (ADDED 2026-10-01). See compute_caps_score.py.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# tf_screen — Module 8c all-TF screen (ADDED 2026-10-01), see 08c_tf_screen.smk.
+#   scopes   : "population" and/or Module 8b cell-type names. Population first;
+#              cell types add little (their networks and aging vectors are alike).
+#   modes    : ko and/or oe, every TF one at a time.
+#   n_chunks : TFs are split strided into this many jobs (586/20 ~ 29 TFs each).
+# ---------------------------------------------------------------------------
+tf_screen:
+  scopes: ["population"]
+  modes: ["ko", "oe"]
+  n_chunks: 20
+
 caps:
   noop_shift_l2: 1.0e-5                # ||TF-activity shift||_2 below this => CAPS NaN (status no_op)
   centrality: percentile               # percentile (default) | raw (v1 summed column-sum)
+  include_modes: ["ko"]                # which knockouts entries get a CAPS row (ko | oe)
+  gap_sample_id: GSE224627_GAP_reprogramming   # check whose verdict labels each scope
+  # Stress / immediate-early TFs for the IEG-excluded CAPS variant (CAPS_noieg).
+  # v2: 3% of the population aging vector's squared norm, 7-12% in cell types
+  # (about 3.5x their share of the TF list), and Fos/Fosb/Jund were in the top
+  # contributors of 33/25/21 of 58 `ok` rows.
+  ieg_genes: [Fos, Fosb, Jun, Junb, Jund, Egr1, Egr2, Egr3, Atf3, Npas4, Nr4a1, Nr4a2, Klf2, Klf4, Ier2, Maff, Mafk, Id1, Id3]

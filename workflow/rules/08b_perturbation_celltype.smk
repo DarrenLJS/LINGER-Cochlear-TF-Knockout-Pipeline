@@ -173,8 +173,8 @@ rule linger_perturbation_celltype_sanity_check:
     log:
         f"{SCRATCH}/logs/08b_sanity_check_{{pert_celltype}}.log",
     resources:
-        runtime   = config["resources"]["linger_perturbation_ko"]["runtime_min"],
-        sge_extra = sge_extra("linger_perturbation_ko"),
+        runtime   = config["resources"]["linger_perturbation_celltype_ko"]["runtime_min"],
+        sge_extra = sge_extra("linger_perturbation_celltype_ko"),
     shell:
         r"""
         set -euo pipefail
@@ -213,11 +213,12 @@ rule linger_perturbation_celltype_ko:
         workdir = f"{SCRATCH}/module4_linger_init",
         module8_dir = MODULE8_DIR,
         tf_list = lambda wc: KNOCKOUTS[wc.ko_id],
+        pert_mode = lambda wc: KO_MODE_OF[wc.ko_id],
     log:
         f"{SCRATCH}/logs/08b_perturb_{{pert_celltype}}_{{ko_id}}.log",
     resources:
-        runtime   = config["resources"]["linger_perturbation_ko"]["runtime_min"],
-        sge_extra = sge_extra("linger_perturbation_ko"),
+        runtime   = config["resources"]["linger_perturbation_celltype_ko"]["runtime_min"],
+        sge_extra = sge_extra("linger_perturbation_celltype_ko"),
     shell:
         r"""
         set -euo pipefail
@@ -230,6 +231,7 @@ rule linger_perturbation_celltype_ko:
             --module8-dir {params.module8_dir} \
             --ko-id "{wildcards.pert_celltype}_{wildcards.ko_id}" \
             --tf-list {params.tf_list} \
+            --mode {params.pert_mode} --oe-quantile {OE_QUANTILE} \
             {PERTURB_FLAGS} \
             --target-path "{input.tg}" \
             --opn-path "{input.re_}" \

@@ -36,18 +36,52 @@
 # check available for this. RUN linger_perturbation_sanity_check AND READ
 # ITS LOG before trusting any real knockout output below.
 #
-# No overexpression mode is built here — per the HTML plan doc's own
-# Module 9 spec ("Positive: Atoh1/Gfi1/Pou4f3 prediction vs. real
-# overexpression data"), Module 9 compares this module's KNOCKOUT
-# predictions directly against real overexpression ground truth (expecting
-# an inverse relationship), rather than needing a separate gain-of-
-# function simulation mode here.
+# OVEREXPRESSION — ADDED 2026-10-01. The original plan compared KNOCKOUT
+# predictions against real overexpression data with a sign flip. A model-
+# capped OE mode now exists too (mode: oe in perturbation.knockouts; see
+# linger_perturbation.py OVEREXPRESSION). The five original checks keep using
+# their KO ids; OE ids feed the generalisation panel and the TF screen.
 # =============================================================================
 
 import re
 
 MODULE8_DIR = f"{SCRATCH}/module8_perturbation"
-KNOCKOUTS = config["perturbation"]["knockouts"]  # dict: ko_id -> [TF, TF, ...]
+# REVISED 2026-10-01 — perturbation.knockouts entries may be either the old
+# list form (["Atoh1"] == a knockout) or a dict {tfs: [...], mode: ko|oe}.
+# KNOCKOUTS stays "ko_id -> TF list" for every downstream rule; KO_MODE_OF gives
+# each id's mode. oe = model-capped overexpression (see linger_perturbation.py).
+def _normalise_ko_spec(ko_id, spec):
+    if isinstance(spec, list):
+        spec = {"tfs": spec, "mode": "ko"}
+    elif isinstance(spec, dict):
+        extra = set(spec) - {"tfs", "mode"}
+        if extra:
+            raise ValueError(f"perturbation.knockouts[{ko_id!r}]: unknown key(s) {sorted(extra)}")
+        spec = {"tfs": spec.get("tfs"), "mode": spec.get("mode", "ko")}
+    else:
+        raise ValueError(f"perturbation.knockouts[{ko_id!r}] must be a list or a dict, got {type(spec).__name__}")
+    if not spec["tfs"] or not all(isinstance(t, str) for t in spec["tfs"]):
+        raise ValueError(f"perturbation.knockouts[{ko_id!r}]: 'tfs' must be a non-empty list of TF names")
+    if spec["mode"] not in ("ko", "oe"):
+        raise ValueError(f"perturbation.knockouts[{ko_id!r}]: mode must be 'ko' or 'oe', got {spec['mode']!r}")
+    return {"tfs": list(spec["tfs"]), "mode": spec["mode"]}
+
+
+_KO_SPECS = {k: _normalise_ko_spec(k, v) for k, v in config["perturbation"]["knockouts"].items()}
+# OE and the batch/screen path need the corrected forward pass. Under the v1
+# reproduction settings (ko_mode legacy / norm_ref live) the OE ids are left out
+# (with a warning) and the Module 8c screen is disabled, instead of failing at run time.
+LEGACY_FORWARD = (config["perturbation"].get("ko_mode", "training_zero") != "training_zero"
+                  or config["perturbation"].get("norm_ref", "population") != "population")
+if LEGACY_FORWARD:
+    _dropped = [k for k, v in _KO_SPECS.items() if v["mode"] == "oe"]
+    if _dropped:
+        print(f"WARNING: perturbation.ko_mode/norm_ref are the legacy v1 settings — overexpression ids {_dropped} "
+              f"are not run (OE needs ko_mode training_zero + norm_ref population); Module 8c is disabled.")
+    _KO_SPECS = {k: v for k, v in _KO_SPECS.items() if v["mode"] == "ko"}
+KNOCKOUTS = {k: v["tfs"] for k, v in _KO_SPECS.items()}      # ko_id -> [TF, ...]
+KO_MODE_OF = {k: v["mode"] for k, v in _KO_SPECS.items()}    # ko_id -> "ko" | "oe"
+OE_QUANTILE = config["perturbation"].get("oe_quantile", 0.99)
 
 # REVISED 2026-10-01 — forward-pass semantics (see linger_perturbation.py's
 # NORMALIZATION / KNOCKOUT docstring sections). Defaults are the corrected
@@ -170,6 +204,7 @@ rule linger_perturbation_ko:
         workdir = f"{SCRATCH}/module4_linger_init",
         module8_dir = MODULE8_DIR,
         tf_list = lambda wc: KNOCKOUTS[wc.ko_id],
+        pert_mode = lambda wc: KO_MODE_OF[wc.ko_id],
     log:
         f"{SCRATCH}/logs/08c_perturb_{{ko_id}}.log",
     resources:
@@ -187,6 +222,7 @@ rule linger_perturbation_ko:
             --module8-dir {params.module8_dir} \
             --ko-id {wildcards.ko_id} \
             --tf-list {params.tf_list} \
+            --mode {params.pert_mode} --oe-quantile {OE_QUANTILE} \
             {PERTURB_FLAGS} \
             --output-tsv {output.pred}
         """

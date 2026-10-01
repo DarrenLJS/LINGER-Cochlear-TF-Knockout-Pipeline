@@ -43,6 +43,27 @@ KNOCKOUT (--ko-mode)  [REVISED 2026-10-01]
       level-blind and amplifies near-zero rows to unit variance. Kept only
       so v1 can be reproduced (--ko-mode legacy --norm-ref live).
 
+OVEREXPRESSION (--mode oe)  [ADDED 2026-10-01]
+  The perturbed TF's raw expression is raised, per sample, to at least a
+  cap: raw_new = max(raw_scope, cap), cap = the --oe-quantile (default 0.99)
+  quantile of that TF's row in the POPULATION Exp. It is level-aware: a
+  sample that already expresses the TF above the cap is NOT lowered, and a
+  TF that is unexpressed everywhere in the population (cap ~ 0) is a no-op.
+  The cap keeps the input inside the range the nets were trained on, so OE
+  here is "model-capped" and will usually be weaker than a real transgene.
+  OE needs --norm-ref population and --ko-mode training_zero (the z-score of
+  the raised value must be taken against the training statistics).
+
+BATCH MODE (--variants-json)  [ADDED 2026-10-01]
+  Runs many perturbations in ONE pass: each chromosome net is loaded once and,
+  per gene, the baseline and every variant go through the net as one stacked
+  batch. Variants are a JSON list of {"id", "tfs", "mode": "ko"|"oe"}.
+  Outputs --shift-tsv (genes x variants, mean over samples of
+  [perturbed - baseline] prediction; a "__baseline_mean__" column holds the
+  baseline mean) and --status-tsv (one row per variant). Needs population
+  normalisation + training_zero (the same maths as the single run; checked
+  numerically against it). No per-sample prediction tables are written.
+
 --sanity-check MODE (run this FIRST, before trusting any real knockout):
 runs the SAME forward pass with an UNMODIFIED Exp (no knockout) and
 reports Spearman correlation between predicted and real (Target) values
@@ -65,6 +86,7 @@ import argparse
 import ast
 import json
 import os
+import time
 
 import numpy as np
 import pandas as pd
@@ -85,7 +107,17 @@ p = argparse.ArgumentParser()
 p.add_argument("--workdir", required=True, help="Module 4/6 workdir, where {chr}_net.pt files live")
 p.add_argument("--module8-dir", required=True, help="dir with Exp.tsv/RE_TGlink_resolved.tsv from prep_pseudobulk_target.py")
 p.add_argument("--ko-id", required=True)
-p.add_argument("--tf-list", nargs="*", default=[], help="TFs to zero. Empty list == sanity-check baseline (no knockout).")
+p.add_argument("--tf-list", nargs="*", default=[],
+                help="TFs to perturb (zeroed for --mode ko, raised to the cap for --mode oe). "
+                     "Empty list == sanity-check baseline (no perturbation).")
+p.add_argument("--mode", choices=["ko", "oe"], default="ko",
+                help="perturbation applied to --tf-list in a single run (see OVEREXPRESSION in the docstring).")
+p.add_argument("--oe-quantile", type=float, default=0.99,
+                help="OE cap = this quantile of the TF's population Exp row (default 0.99).")
+p.add_argument("--variants-json", default=None,
+                help="BATCH MODE: JSON list of {id, tfs, mode}; replaces --tf-list/--mode. See docstring.")
+p.add_argument("--shift-tsv", default=None, help="batch mode: genes x variants mean-shift output.")
+p.add_argument("--status-tsv", default=None, help="batch mode: per-variant status table.")
 p.add_argument("--sanity-check", action="store_true",
                 help="Also compute predicted-vs-real correlation against Target.")
 p.add_argument("--target-path", default=None,
@@ -102,11 +134,34 @@ p.add_argument("--ko-mode", choices=["training_zero", "legacy"], default="traini
                 help="knockout semantics: 'training_zero' (default) or v1 'legacy' mean-clamp (see docstring).")
 p.add_argument("--gate-min-median-rho", type=float, default=0.5)
 p.add_argument("--gate-min-frac-gt03", type=float, default=0.7)
-p.add_argument("--output-tsv", required=True)
+p.add_argument("--output-tsv", default=None, help="single-run predicted expression (required unless --variants-json)")
 args = p.parse_args()
+
+BATCH = args.variants_json is not None
+if BATCH:
+    if not (args.shift_tsv and args.status_tsv):
+        raise ValueError("--variants-json requires --shift-tsv and --status-tsv")
+    if args.tf_list:
+        raise ValueError("--variants-json replaces --tf-list; do not pass both")
+    if args.sanity_check:
+        raise ValueError("--sanity-check is a single-run option, not available in batch mode")
+    if args.norm_ref != "population" or args.ko_mode != "training_zero":
+        raise ValueError("batch mode needs --norm-ref population and --ko-mode training_zero")
+else:
+    if not args.output_tsv:
+        raise ValueError("--output-tsv is required unless --variants-json is given")
+if args.mode == "oe" and (args.norm_ref != "population" or args.ko_mode != "training_zero"):
+    raise ValueError("--mode oe needs --norm-ref population and --ko-mode training_zero")
+if not (0.5 <= args.oe_quantile <= 1.0):
+    raise ValueError(f"--oe-quantile must be in [0.5, 1], got {args.oe_quantile}")
 
 WORKDIR = args.workdir
 eps = 1e-6
+_T0 = time.perf_counter()
+
+
+def _tick(msg):
+    print(f"[timing] {msg}: {time.perf_counter() - _T0:.1f}s since start", flush=True)
 
 # Persisted population Exp — always loaded, since its row (TF) order is what
 # every {chr}_net.pt was trained against and its row statistics are the
@@ -138,8 +193,9 @@ RE_TGlink = pd.read_csv(os.path.join(args.module8_dir, "RE_TGlink_resolved.tsv")
 re_col = [c for c in RE_TGlink.columns if c not in ("gene", "chr")][0]
 RE_TGlink[re_col] = RE_TGlink[re_col].apply(ast.literal_eval)
 
-print(f"--- {args.ko_id} (knockout TFs: {args.tf_list or '[none — baseline]'}) "
+print(f"--- {args.ko_id} ({'BATCH of ' + args.variants_json if BATCH else args.mode + ' TFs: ' + str(args.tf_list or '[none — baseline]')}) "
       f"[ko-mode={args.ko_mode}, norm-ref={args.norm_ref}] ---")
+_tick("inputs loaded")
 
 # ---- fail-loud knockout guard -------------------------------------------------
 missing = [tf for tf in args.tf_list if tf not in Exp.index]
@@ -181,10 +237,139 @@ if args.norm_ref == "population" or (args.ko_mode == "training_zero" and KO_SET)
     re_sd = re_sd[~re_sd.index.duplicated()]
     print(f"population normalisation statistics: {len(tf_mu_all)} TF rows, {len(re_mu)} RE rows")
 
-# ---- apply knockout to a COPY (raw expression = 0) ----------------------------
+_tick("population statistics ready")
+
+# ---- OE cap: quantile of the population Exp row (see OVEREXPRESSION) ----------
+oe_cap = pd.Series(np.quantile(Exp_population.values.astype(np.float64), args.oe_quantile, axis=1),
+                   index=Exp_population.index)
+
+# =============================================================================
+# BATCH MODE — every variant + the baseline through each net in one stacked batch
+# =============================================================================
+if BATCH:
+    with open(args.variants_json) as fh:
+        variants = json.load(fh)
+    if not isinstance(variants, list) or not variants:
+        raise ValueError(f"{args.variants_json}: expected a non-empty JSON list of {{id, tfs, mode}}")
+    ids = [v["id"] for v in variants]
+    if len(set(ids)) != len(ids):
+        raise ValueError(f"duplicate variant ids in {args.variants_json}")
+    if "__baseline_mean__" in ids:
+        raise ValueError("variant id '__baseline_mean__' is reserved")
+    tf_index = {t: i for i, t in enumerate(Exp.index)}
+    for v in variants:
+        if v.get("mode") not in ("ko", "oe"):
+            raise ValueError(f"variant {v.get('id')!r}: mode must be 'ko' or 'oe', got {v.get('mode')!r}")
+        if not v.get("tfs"):
+            raise ValueError(f"variant {v['id']!r}: empty tfs list")
+        miss = [t for t in v["tfs"] if t not in tf_index]
+        if miss:
+            raise ValueError(f"variant {v['id']!r}: TF(s) {miss} not in the population TF list "
+                             f"({Exp.shape[0]} TFs) — refusing to run a silent no-op.")
+
+    S = Exp.shape[1]
+    raw = Exp.values.astype(np.float64)                       # (T, S)
+    deg_tf = tf_sd_all <= eps
+    z_base = (raw - tf_mu_all[:, None]) / (tf_sd_all[:, None] + eps)
+    z_base[deg_tf] = 0.0
+
+    def _z_row(i, raw_row):
+        return np.zeros(S) if deg_tf[i] else (raw_row - tf_mu_all[i]) / (tf_sd_all[i] + eps)
+
+    Zs = [z_base]                                             # index 0 = baseline
+    n_changed = []
+    for v in variants:
+        Zv = z_base.copy()
+        changed = 0
+        for t in v["tfs"]:
+            i = tf_index[t]
+            new_raw = np.zeros(S) if v["mode"] == "ko" else np.maximum(raw[i], oe_cap.iloc[i])
+            changed += int((new_raw != raw[i]).sum())
+            Zv[i] = _z_row(i, new_raw)
+        Zs.append(Zv)
+        n_changed.append(changed)
+    Zs_t = [torch.tensor(z, dtype=torch.float32) for z in Zs]
+    NV = len(Zs)                                              # baseline + variants
+
+    shift_cols = {v: {} for v in ids}
+    base_mean = {}
+    missing_nets_b = 0
+    for chrom in sorted(RE_TGlink["chr"].unique()):
+        net_path = os.path.join(WORKDIR, f"{chrom}_net.pt")
+        if not os.path.exists(net_path):
+            print(f"WARNING: {net_path} not found — skipping chromosome {chrom} entirely "
+                  f"({(RE_TGlink['chr'] == chrom).sum()} genes affected)")
+            continue
+        netall = torch.load(net_path)
+        chr_rows = RE_TGlink[RE_TGlink["chr"] == chrom].reset_index(drop=True)
+        for idx in range(chr_rows.shape[0]):
+            if idx not in netall:
+                missing_nets_b += 1
+                continue
+            gene = chr_rows.loc[idx, "gene"]
+            re_list = chr_rows.loc[idx, re_col]
+            keep = (Exp.index != gene) if gene in Exp.index else np.ones(Exp.shape[0], dtype=bool)
+            re_series = Opn.reindex(re_list)
+            REtemp = re_series.fillna(0).values
+            mu_re = re_mu.reindex(re_list).fillna(0.0).values
+            sd_re = re_sd.reindex(re_list).fillna(0.0).values
+            z_re = (REtemp - mu_re[:, None]) / (sd_re[:, None] + eps)
+            deg = sd_re <= eps
+            z_re[deg] = 0.0
+            z_re_t = torch.tensor(z_re, dtype=torch.float32)
+            keep_t = torch.tensor(keep)
+            batch = torch.cat([torch.cat((Zt[keep_t], z_re_t), dim=0).T for Zt in Zs_t], dim=0)  # (NV*S, F)
+            net = netall[idx]
+            net.eval()
+            with torch.no_grad():
+                y = net(batch).detach().numpy().reshape(NV, S)
+            m = y.mean(axis=1)
+            base_mean[gene] = m[0]
+            for k, vid in enumerate(ids):
+                shift_cols[vid][gene] = m[k + 1] - m[0]
+        _tick(f"{chrom} done ({chr_rows.shape[0]} genes, {NV} forward variants incl. baseline)")
+
+    if missing_nets_b:
+        print(f"NOTE: {missing_nets_b} genes had no trained net — excluded, not an error here.")
+    if not base_mean:
+        raise RuntimeError("no gene produced a prediction — check net files / RE_TGlink_resolved.tsv")
+    shift_df = pd.DataFrame(shift_cols)
+    shift_df["__baseline_mean__"] = pd.Series(base_mean)
+    if shift_df.isna().any().any():
+        raise RuntimeError(f"{int(shift_df.isna().sum().sum())} NaN values in batch output — "
+                           f"refusing to write a poisoned file.")
+    rows = []
+    for k, v in enumerate(variants):
+        # A variant whose input rows are identical to the baseline's (TF unchanged in
+        # this scope, or a degenerate z=0 row) is an EXACT no-op: set its shift to 0
+        # so float32 batch-offset noise (~1e-7) cannot make it look like a tiny effect.
+        exact_noop = n_changed[k] == 0 or all(deg_tf[tf_index[t]] for t in v["tfs"])
+        if exact_noop:
+            shift_df[v["id"]] = 0.0
+        col = shift_df[v["id"]].values
+        rows.append({"variant": v["id"], "mode": v["mode"], "tfs": ",".join(v["tfs"]),
+                     "n_samples_changed": n_changed[k],
+                     "shift_l2": float(np.sqrt((col ** 2).sum())),
+                     "shift_max_abs": float(np.abs(col).max()),
+                     "noop": bool(exact_noop or np.abs(col).max() < 1e-6)})
+    shift_df.to_csv(args.shift_tsv, sep="\t")
+    pd.DataFrame(rows).to_csv(args.status_tsv, sep="\t", index=False)
+    n_noop = sum(r["noop"] for r in rows)
+    print(f"Wrote {args.shift_tsv}: {shift_df.shape[0]} genes x {len(ids)} variants (+ baseline); "
+          f"{n_noop} variant(s) are exact no-ops (perturbed TF unchanged in this scope). Status: {args.status_tsv}")
+    _tick("batch finished")
+    raise SystemExit(0)
+
+# ---- apply the perturbation to a COPY ------------------------------------------
 Exp_ko = Exp.copy()
 for tf in args.tf_list:
-    Exp_ko.loc[tf] = 0
+    if args.mode == "ko":
+        Exp_ko.loc[tf] = 0
+    else:
+        new_raw = np.maximum(Exp.loc[tf].values, oe_cap[tf])
+        print(f"OE {tf}: cap (q{args.oe_quantile}) = {oe_cap[tf]:.4g}; "
+              f"{int((new_raw != Exp.loc[tf].values).sum())}/{Exp.shape[1]} samples raised")
+        Exp_ko.loc[tf] = new_raw
 
 predicted = {}  # gene -> np.array of predicted values across samples
 missing_nets = 0
@@ -250,6 +435,7 @@ for chrom in sorted(RE_TGlink["chr"].unique()):
         with torch.no_grad():
             y_pred = net(inputs.T)
         predicted[gene] = y_pred.detach().numpy().reshape(-1)
+    _tick(f"{chrom} done ({chr_rows.shape[0]} genes)")
 
 if missing_nets:
     print(f"NOTE: {missing_nets} genes had no trained net for their chromosome "
@@ -266,6 +452,7 @@ if pred_df.isna().any().any():
                        f"refusing to write a poisoned output.")
 pred_df.to_csv(args.output_tsv, sep="\t")
 print(f"Wrote {args.output_tsv}: {pred_df.shape[0]} genes x {pred_df.shape[1]} samples")
+_tick("single run finished")
 
 if args.sanity_check:
     common = [g for g in pred_df.index if g in Target.index]

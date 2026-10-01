@@ -43,7 +43,24 @@ top_contributors: the three TFs with the largest |shift_i * aging_unit_i| with
   their contribution and that TF's column-sum in this scope — what actually
   drives the score.
 
-status: ok | no_op | scope_fails_sanity | too_few_tfs
+status: ok | no_op | scope_fails_sanity | too_few_tfs | ko_tf_no_network
+  ko_tf_no_network (ADDED 2026-10-01): a knocked-out TF has no column, or an
+  all-zero column, in this scope's trans-regulatory matrix (e.g. Thap11 is
+  absent from every cell-type matrix; 8 TFs have zero columns in the
+  population matrix). Its TF activity is undefined, so CAPS = NaN instead of
+  a misleading 0.
+
+ADDED 2026-10-01 (reporting, nothing above changes):
+  gap_verdict / validated_scope : this scope's verdict on the GAP reprogramming
+      check (--gap-sample-id), read from the combined validation report;
+      validated_scope is True only for PASS. CAPS is NOT gated on it — it is a
+      label so a reader can see which scopes the model reproduces.
+  sign_adjusted_shift_noieg / CAPS_noieg : the same projection with the
+      stress / immediate-early TFs (--ieg-genes) removed from both the shift
+      and the aging vector (vector re-normalised on the retained TFs).
+  ieg_share_aging : share of the scope aging vector's squared norm carried by
+      those TFs (diagnostic: 3% population, 7-12% cell types in v2).
+  n_ieg_in_top3 : how many of top_contributors are in that list.
 Rank within scope (not across scopes): scopes differ in matrix, vector and
 sanity quality, so cross-scope CAPS magnitudes are qualitative only.
 """
@@ -65,6 +82,10 @@ p.add_argument("--population-aging-shift-tsv", default=None,
                help="population aging vector, for the caps_popvec sensitivity column")
 p.add_argument("--trans-regulatory-tsv", required=True)
 p.add_argument("--validation-report-combined", required=True)
+p.add_argument("--ieg-genes", nargs="*", default=[],
+               help="stress / immediate-early TFs for the IEG-excluded variant")
+p.add_argument("--gap-sample-id", default="GSE224627_GAP_reprogramming",
+               help="sample_id of the GAP reprogramming check whose verdict labels the scope")
 p.add_argument("--noop-shift-l2", type=float, default=1e-5)
 p.add_argument("--centrality", choices=["percentile", "raw"], default="percentile")
 p.add_argument("--output-tsv", required=True)
@@ -80,9 +101,14 @@ tf_activity_shift = ko_act.loc[common_tfs] - baseline_act.loc[common_tfs]
 print(f"tf_activity_shift: {len(tf_activity_shift)} TFs (baseline vs {args.ko_id} forward-pass output)")
 
 
-def _project(shift, vec_path, label):
-    """-> (projection onto unit vec, cosine, n_common, contributions Series)"""
+def _project(shift, vec_path, label, exclude=()):
+    """-> (projection onto unit vec, cosine, n_common, contributions Series).
+    `exclude`: TFs dropped from BOTH the shift and the vector before the vector
+    is re-normalised (IEG-excluded variant)."""
     vec = pd.read_csv(vec_path, sep="\t", index_col=0)["shift"]
+    if len(exclude):
+        vec = vec.drop(index=[g for g in exclude if g in vec.index])
+        shift = shift.drop(index=[g for g in exclude if g in shift.index])
     common = shift.index.intersection(vec.index)
     s, a = shift.loc[common], vec.loc[common]
     finite = s.notna() & a.notna()
@@ -105,6 +131,11 @@ def _project(shift, vec_path, label):
 
 sign_adjusted_shift, cosine_to_aging, n_common_aging_tfs, contrib = _project(
     tf_activity_shift, args.aging_shift_tsv, "scope aging vector")
+sign_adjusted_shift_noieg, _, _, _ = _project(
+    tf_activity_shift, args.aging_shift_tsv, "scope aging vector, IEG-excluded", exclude=args.ieg_genes)
+_av = pd.read_csv(args.aging_shift_tsv, sep="\t", index_col=0)["shift"].dropna()
+ieg_share_aging = (float((_av.loc[_av.index.intersection(args.ieg_genes)] ** 2).sum() / (_av ** 2).sum())
+                   if len(_av) and float((_av ** 2).sum()) > 0 else np.nan)
 caps_popvec_proj = np.nan
 if args.population_aging_shift_tsv and os.path.exists(args.population_aging_shift_tsv):
     caps_popvec_proj, _, _, _ = _project(tf_activity_shift, args.population_aging_shift_tsv, "population aging vector")
@@ -123,10 +154,18 @@ if missing:
 regulatory_centrality_raw = float(sum(colsum.get(tf, 0.0) for tf in args.tf_list))
 regulatory_centrality_pct = float(np.mean([pct.get(tf, 0.0) for tf in args.tf_list]))
 regulatory_centrality = regulatory_centrality_pct if args.centrality == "percentile" else regulatory_centrality_raw
+ko_tf_in_network = all((tf in colsum.index) and float(colsum[tf]) > 0 for tf in args.tf_list)
 
 # ------------------------------------------------------------------ confidence
 vrc = pd.read_csv(args.validation_report_combined, sep="\t")
 scope_rows = vrc[vrc["scope"] == args.scope]
+gap_rows = vrc[(vrc["scope"] == args.scope) & (vrc["sample_id"] == args.gap_sample_id)]
+if len(gap_rows):
+    _col = "pass_fail" if "pass_fail" in gap_rows.columns else "verdict"
+    gap_verdict = str(gap_rows[_col].iloc[0])
+else:
+    gap_verdict = "missing"
+validated_scope = gap_verdict == "PASS"
 raw_sanity_rho, sanity_pass = np.nan, False
 if len(scope_rows) and scope_rows["sanity_rho"].notna().any():
     raw_sanity_rho = float(scope_rows["sanity_rho"].dropna().iloc[0])
@@ -139,18 +178,25 @@ else:
 confidence_weight = float(np.clip(raw_sanity_rho, 0.0, 1.0)) if (np.isfinite(raw_sanity_rho) and sanity_pass) else 0.0
 
 # ------------------------------------------------------------------ status + CAPS
+CAPS_noieg = np.nan
 if not np.isfinite(sign_adjusted_shift):
     status, CAPS, caps_popvec = "too_few_tfs", np.nan, np.nan
+elif not ko_tf_in_network:
+    status, CAPS, caps_popvec = "ko_tf_no_network", np.nan, np.nan
+    print(f"KO TF(s) {args.tf_list} have no usable column in {args.trans_regulatory_tsv} — TF activity undefined; CAPS = NaN")
 elif not np.isfinite(shift_l2) or shift_l2 < args.noop_shift_l2:
     status, CAPS, caps_popvec = "no_op", np.nan, np.nan
     print(f"NO-OP: ||shift||_2 = {shift_l2:.3g} < {args.noop_shift_l2:g} — the knockout does nothing in this scope; CAPS = NaN")
 elif not sanity_pass:
     status = "scope_fails_sanity"
     CAPS = sign_adjusted_shift * regulatory_centrality * 0.0
+    CAPS_noieg = sign_adjusted_shift_noieg * regulatory_centrality * 0.0 if np.isfinite(sign_adjusted_shift_noieg) else np.nan
     caps_popvec = caps_popvec_proj * regulatory_centrality * 0.0 if np.isfinite(caps_popvec_proj) else np.nan
 else:
     status = "ok"
     CAPS = sign_adjusted_shift * regulatory_centrality * confidence_weight
+    CAPS_noieg = (sign_adjusted_shift_noieg * regulatory_centrality * confidence_weight
+                  if np.isfinite(sign_adjusted_shift_noieg) else np.nan)
     caps_popvec = (caps_popvec_proj * regulatory_centrality * confidence_weight
                    if np.isfinite(caps_popvec_proj) else np.nan)
 
@@ -176,6 +222,12 @@ result = {
     "caps_popvec": caps_popvec,
     "status": status,
     "top_contributors": top,
+    "gap_verdict": gap_verdict,
+    "validated_scope": validated_scope,
+    "sign_adjusted_shift_noieg": sign_adjusted_shift_noieg,
+    "CAPS_noieg": CAPS_noieg,
+    "ieg_share_aging": ieg_share_aging,
+    "n_ieg_in_top3": int(sum(any(t.startswith(g + "(") for g in args.ieg_genes) for t in top.split(";") if t)),
 }
 pd.DataFrame([result]).to_csv(args.output_tsv, sep="\t", index=False)
 print(f"Wrote {args.output_tsv}: status={status}, sign_adjusted_shift={sign_adjusted_shift}, "

@@ -119,6 +119,8 @@ def _ct_validation_inputs(wildcards):
         "sanity_check": f"{MODULE8B_DIR}/{ct}/_sanity_check_baseline_predicted.tsv",
         "tg_baseline": f"{MODULE8B_DIR}/{ct}/TG_pseudobulk_{ct}.tsv",
     }
+    if _null_args_for(spec["ko_id"], ct):
+        inputs["null_status"] = f"{MODULE8C_DIR}/{ct}/screen_status.tsv"
     return inputs
 
 
@@ -141,6 +143,8 @@ rule validate_celltype_one:
         baseline_tsv = lambda wc: f"{MODULE8B_DIR}/{wc.pert_celltype}/TG_pseudobulk_{wc.pert_celltype}.tsv",
         sanity_tsv = lambda wc: f"{MODULE8B_DIR}/{wc.pert_celltype}/_sanity_check_baseline_predicted.tsv",
         baseline_entry_json = _ct_baseline_entry_json,
+        null_args = lambda wc: _null_args_for(
+            CHECK_SPECS[_HELD_OUT_ENTRIES[wc.sample_id]["check"]]["ko_id"], wc.pert_celltype),
     log:
         f"{SCRATCH}/logs/09x_validate_celltype_{{pert_celltype}}_{{sample_id}}.log",
     resources:
@@ -168,6 +172,7 @@ rule validate_celltype_one:
             --baseline-tsv "{params.baseline_tsv}" \
             --sanity-tsv "{params.sanity_tsv}" \
             {VALIDATION_FLAGS} \
+            {params.null_args} \
             --output-tsv "{output.score}" \
             "${{BASELINE_ENTRY_ARGS[@]}}"
         """

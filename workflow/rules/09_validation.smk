@@ -86,6 +86,24 @@ VALIDATION_FLAGS = (
     f"--noop-pred-sd {_VCFG.get('noop_pred_shift_sd', 1e-6)}"
 )
 
+# ADDED 2026-10-01 — empirical null from the Module 8c all-TF screen (config
+# validation.null_from_screen; default false so Module 9 does not silently
+# depend on the screen). Returns the validate_held_out.py null flags for a check
+# in a given scope, or "" when off / the check has no knockout / the scope was
+# not screened.
+NULL_FROM_SCREEN = bool(_VCFG.get("null_from_screen", False))
+NULL_PCTILE_MAX = _VCFG.get("null_pctile_max", 0.95)
+
+
+def _null_args_for(ko_id, scope):
+    if not NULL_FROM_SCREEN or not ko_id or scope not in SCREEN_SCOPES:
+        return ""
+    if KO_MODE_OF[ko_id] not in SCREEN_MODES:
+        return ""
+    return (f'--null-screen-dir "{MODULE8C_DIR}/{scope}" --null-mode {KO_MODE_OF[ko_id]} '
+            f'--null-pctile-max {NULL_PCTILE_MAX} --null-exclude-tfs {" ".join(KNOCKOUTS[ko_id])}')
+
+
 _HELD_OUT_ENTRIES = {e["sample_id"]: e for e in HELD_OUT_CFG}
 _HELD_OUT_ENTRIES[NEGATIVE_CONTROL_CFG["sample_id"]] = NEGATIVE_CONTROL_CFG
 VALIDATION_SAMPLE_IDS = list(_HELD_OUT_ENTRIES.keys())
@@ -147,6 +165,8 @@ def _validation_inputs(wildcards):
     if spec["ko_id"] is not None:
         inputs["ko_pred"] = f"{SCRATCH}/module8_perturbation/{spec['ko_id']}_predicted_expression.tsv"
         inputs["sanity_check"] = f"{SCRATCH}/module8_perturbation/_sanity_check_baseline_predicted.tsv"
+        if _null_args_for(spec["ko_id"], "population"):
+            inputs["null_status"] = f"{MODULE8C_DIR}/population/screen_status.tsv"
     return inputs
 
 
@@ -170,6 +190,8 @@ rule validate_one:
             f"{SCRATCH}/module8_perturbation/_sanity_check_baseline_predicted.tsv"
             if CHECK_SPECS[_HELD_OUT_ENTRIES[wc.sample_id]["check"]]["ko_id"] else ""
         ),
+        null_args = lambda wc: _null_args_for(
+            CHECK_SPECS[_HELD_OUT_ENTRIES[wc.sample_id]["check"]]["ko_id"], "population"),
     log:
         f"{SCRATCH}/logs/09a_validate_{{sample_id}}.log",
     resources:
@@ -199,6 +221,7 @@ rule validate_one:
             --entry-json {params.entry_json:q} \
             --check-spec-json {params.check_spec_json:q} \
             {VALIDATION_FLAGS} \
+            {params.null_args} \
             --output-tsv {output.score} \
             "${{SANITY_ARGS[@]}}" \
             "${{BASELINE_ENTRY_ARGS[@]}}"

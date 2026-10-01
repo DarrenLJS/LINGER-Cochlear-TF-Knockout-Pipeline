@@ -37,14 +37,22 @@
 
 MODULE11_DIR = f"{SCRATCH}/module11_caps"
 
-CAPS_KO_IDS = list(KNOCKOUTS.keys())
+# REVISED 2026-10-01 — only ids whose mode is in caps.include_modes (default
+# ["ko"]) get a CAPS row: CAPS was designed for knockouts, and OE ids (added for
+# the generalisation panel / TF screen) would otherwise enter the table.
+_CAPS_CFG0 = config.get("caps", {})
+CAPS_INCLUDE_MODES = _CAPS_CFG0.get("include_modes", ["ko"])
+CAPS_KO_IDS = [k for k in KNOCKOUTS.keys() if KO_MODE_OF[k] in CAPS_INCLUDE_MODES]
 
 # REVISED 2026-10-01 — see compute_caps_score.py / aggregate_caps_scores.py.
 _CAPS_CFG = config.get("caps", {})
 CAPS_NOOP_L2 = _CAPS_CFG.get("noop_shift_l2", 1e-5)
 CAPS_CENTRALITY = _CAPS_CFG.get("centrality", "percentile")
 assert CAPS_CENTRALITY in ("percentile", "raw"), f"caps.centrality={CAPS_CENTRALITY!r}"
-CAPS_FLAGS = f"--noop-shift-l2 {CAPS_NOOP_L2} --centrality {CAPS_CENTRALITY}"
+CAPS_IEG = " ".join(_CAPS_CFG.get("ieg_genes", []))
+CAPS_GAP_SAMPLE_ID = _CAPS_CFG.get("gap_sample_id", "GSE224627_GAP_reprogramming")
+CAPS_FLAGS = (f"--noop-shift-l2 {CAPS_NOOP_L2} --centrality {CAPS_CENTRALITY} "
+              f"--gap-sample-id {CAPS_GAP_SAMPLE_ID} --ieg-genes {CAPS_IEG}")
 
 wildcard_constraints:
     caps_ko_id = "|".join(re.escape(k) for k in CAPS_KO_IDS) if CAPS_KO_IDS else "(?!)",
