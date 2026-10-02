@@ -2411,14 +2411,16 @@ perturbation:
 # validate_held_out.py's REVISED docstring block for the full rule.
 # ---------------------------------------------------------------------------
 validation:
-  # ADDED 2026-10-01 — empirical null from the Module 8c all-TF screen. When true,
-  # Module 9 (population) / 9b (a cell type, only if that scope is in
-  # tf_screen.scopes) take the screen's shifts as inputs and report where this
-  # check's rho sits among the single-TF knockouts' rho (null_pctile). For the
-  # NEGATIVE control the verdict then uses that percentile (PASS if below
-  # null_pctile_max); positive checks keep the bootstrap verdict. Leave false
-  # until module8c_all has been run — true makes Module 9 depend on the screen.
-  null_from_screen: false
+  # ADDED 2026-10-01 — empirical null from the Module 8c all-TF screen. Module 9
+  # (population) / 9b (a cell type, only if that scope is in tf_screen.scopes)
+  # take the screen's shifts as inputs and report where this check's rho sits
+  # among the single-TF perturbations' rho of the same mode (null_pctile). For
+  # the NEGATIVE control the verdict then uses that percentile (PASS if below
+  # null_pctile_max); positive checks keep the bootstrap verdict.
+  # true makes Module 9 depend on the screen (module8c): a fresh run schedules
+  # the screen chunks ahead of validation by itself. Set false only to skip the
+  # screen and use the bootstrap verdict alone.
+  null_from_screen: true
   null_pctile_max: 0.95
   bootstrap_n: 1000                    # gene-bootstrap resamples for the CI
   bootstrap_seed: 0

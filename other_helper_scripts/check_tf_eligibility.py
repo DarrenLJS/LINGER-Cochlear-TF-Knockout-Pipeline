@@ -44,9 +44,13 @@ pipeline's `preprocessed` dir) this also writes tf_eligibility_by_scope.tsv:
 one row per (gene, scope) with in_network (column present and, for the
 population matrix, non-zero), mean_expr / frac_samples_expressed from that
 scope's TG pseudobulk, expressed_in_scope (mean_expr > --min-mean-expr, a
-JUDGMENT-CALL threshold: read the numbers, not just the flag), ko_noop_expected
-(= not expressed_in_scope) and oe_possible (= in_network). OE of an unexpressed
-TF is NOT a no-op, so only the knockout is blocked by non-expression.
+DESCRIPTIVE judgment-call threshold: read the numbers, not just the flag),
+ko_noop_expected (= not in_network, or expressed in ZERO samples: the knockout
+then changes nothing; a TF expressed in a few samples is NOT a no-op even when
+its mean is small), oe_cap_q99 (the population Exp.tsv row's --oe-quantile
+value, the level Module 8's OE mode raises each sample to; the cap always comes
+from the population row, in every scope) and oe_possible (= in_network and
+oe_cap_q99 > 0; a TF with a zero cap in the population is an exact OE no-op).
 
 Usage:
     python check_tf_eligibility.py --module8-dir /path/to/module8_output_dir
@@ -61,6 +65,7 @@ Usage:
 import argparse
 import os
 
+import numpy as np
 import pandas as pd
 
 # Default candidate list: the 4 new genes the generalization panel wants to
@@ -94,6 +99,8 @@ def main():
     ap.add_argument("--scratch", default=None,
                      help="pipeline `preprocessed` dir; enables the per-scope table")
     ap.add_argument("--scope-out", default="tf_eligibility_by_scope.tsv")
+    ap.add_argument("--oe-quantile", type=float, default=0.99,
+                     help="population quantile used as the OE level (match perturbation.oe_quantile)")
     ap.add_argument("--min-mean-expr", type=float, default=0.05,
                      help="mean ln-CP10k pseudobulk expression above which a TF counts as expressed in a "
                           "scope (judgment call; the numbers are reported too)")
@@ -173,6 +180,12 @@ def per_scope(args, exact_set):
                                              "TG_pseudobulk_*.tsv"))):
         ct = os.path.basename(os.path.dirname(tg))
         scopes[ct] = (tg, os.path.join(w, f"cell_type_specific_trans_regulatory_{ct}.txt"))
+    exp_path = os.path.join(args.module8_dir, "Exp.tsv")
+    if not os.path.exists(exp_path):
+        raise FileNotFoundError(f"{exp_path} not found; --module8-dir must hold Exp.tsv for the OE cap")
+    exp_pop = pd.read_csv(exp_path, sep="\t", index_col=0)
+    oe_cap = pd.Series(np.quantile(exp_pop.values.astype(np.float64), args.oe_quantile, axis=1),
+                       index=exp_pop.index)
     rows = []
     zero_cols = set()
     for scope, (tg_path, tr_path) in scopes.items():
@@ -194,15 +207,17 @@ def per_scope(args, exact_set):
             else:
                 mean_e, frac = float("nan"), float("nan")
             expressed = bool(in_net and mean_e > args.min_mean_expr) if mean_e == mean_e else False
+            ko_noop = (not in_net) or not (frac > 0)       # NaN frac -> no-op
+            cap = float(oe_cap[gene]) if gene in oe_cap.index else float("nan")
             rows.append({"gene": gene, "scope": scope, "in_exp_index": gene in exact_set,
                          "in_network": in_net, "mean_expr": mean_e, "frac_samples_expressed": frac,
-                         "expressed_in_scope": expressed, "ko_noop_expected": not expressed,
-                         "oe_possible": in_net})
+                         "expressed_in_scope": expressed, "ko_noop_expected": bool(ko_noop),
+                         "oe_cap_q99": cap, "oe_possible": bool(in_net and cap > 0)})
     out = pd.DataFrame(rows)
     out.to_csv(args.scope_out, sep="\t", index=False)
     print(f"\nWrote {args.scope_out}: {len(out)} (gene, scope) rows over {out['scope'].nunique()} scopes.")
-    piv = out.pivot(index="gene", columns="scope", values="expressed_in_scope")
-    print("expressed_in_scope (True = knockout is NOT a no-op there):")
+    piv = out.pivot(index="gene", columns="scope", values="ko_noop_expected")
+    print("ko_noop_expected (True = the knockout changes nothing in that scope):")
     print(piv.to_string())
 
 

@@ -12,11 +12,14 @@
 #
 # CHECK_SPECS maps each config `check` value (held_out_inputs /
 # negative_control_input) to how it's scored:
-#   - atoh1_gfi1_pou4f3_overexpression: compares Module 8's triple_ko
-#     prediction (sign-flipped: knockout simulates loss, this held-out
-#     data shows gain) directly against GSE224627's real profile — per
-#     the HTML's own spec ("...prediction vs. real overexpression data"),
-#     NOT a separately-built overexpression simulation mode.
+#   - atoh1_gfi1_pou4f3_overexpression: compares Module 8's triple_oe
+#     prediction (the OE mode, sign +1) directly against GSE224627's real
+#     profile. REVISED 2026-10-02: this used triple_ko with sign -1, a
+#     knockout standing in for a gain; that is a no-op wherever the three TFs
+#     are not expressed (Supporting cell, Osteoblast), so those scopes could
+#     not be scored. The OE mode raises each sample to the TF's population
+#     q99 and works in every scope. gap_supporting_cell_secondary and the
+#     negative control use the same prediction.
 #   - tbx2_conversion: Module 8's tbx2_ko prediction (no sign flip — this
 #     is a real loss-of-function conversion) against GSE233559.
 #   - aging_vector / aging_vector_support: Module 7's role="baseline" mean
@@ -66,15 +69,15 @@ MODULE9_DIR = f"{SCRATCH}/module9_validation"
 #     cell-identity contrast with no within-study control for a Tbx2 loss, so
 #     it cannot test a Tbx2 knockout. Tbx2 is scored in the generalization
 #     track instead.
-#   * gap_supporting_cell_secondary: same triple_ko prediction against the
+#   * gap_supporting_cell_secondary: same triple_oe prediction against the
 #     GSE224627 reprogrammed supporting-cell clusters (secondary contrast).
 CHECK_SPECS = {
-    "atoh1_gfi1_pou4f3_overexpression": {"mode": "expression_shift", "ko_id": "triple_ko", "sign": -1, "invert_pass": False, "top_k": 200},
-    "gap_supporting_cell_secondary":    {"mode": "expression_shift", "ko_id": "triple_ko", "sign": -1, "invert_pass": False, "top_k": 200},
+    "atoh1_gfi1_pou4f3_overexpression": {"mode": "expression_shift", "ko_id": "triple_oe", "sign": 1, "invert_pass": False, "top_k": 200},
+    "gap_supporting_cell_secondary":    {"mode": "expression_shift", "ko_id": "triple_oe", "sign": 1, "invert_pass": False, "top_k": 200},
     "tbx2_conversion":                  {"mode": "expression_shift", "ko_id": "tbx2_ko",   "sign": 1,  "invert_pass": False, "top_k": 200, "scored": False},
     "aging_vector":                     {"mode": "aging_tf_activity", "ko_id": None, "sign": None, "invert_pass": False, "top_k": 200, "aging_role": "reference"},
     "aging_vector_support":             {"mode": "aging_tf_activity", "ko_id": None, "sign": None, "invert_pass": False, "top_k": 200, "aging_role": "support"},
-    "negative_control_must_not_reprogram": {"mode": "expression_shift", "ko_id": "triple_ko", "sign": -1, "invert_pass": True, "top_k": 200},
+    "negative_control_must_not_reprogram": {"mode": "expression_shift", "ko_id": "triple_oe", "sign": 1, "invert_pass": True, "top_k": 200},
 }
 
 # Verdict parameters (config validation.*), forwarded to validate_held_out.py.
