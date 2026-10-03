@@ -281,7 +281,8 @@ rule module11_aggregate:
     input:
         caps_scores = _module11_caps_targets(),
     output:
-        f"{MODULE11_DIR}/caps_scores.tsv",
+        caps = f"{MODULE11_DIR}/caps_scores.tsv",
+        consensus = f"{MODULE11_DIR}/caps_headline_consensus.tsv",
     params:
         module11_dir = MODULE11_DIR,
     log:
@@ -297,10 +298,12 @@ rule module11_aggregate:
         export LD_LIBRARY_PATH="{LINGER_ENV_LIB}:$LD_LIBRARY_PATH"
         {LINGER_PYTHON} workflow/scripts/aggregate_caps_scores.py \
             --module11-dir "{params.module11_dir}" \
-            --output-tsv "{output}"
+            --output-tsv "{output.caps}" \
+            --output-consensus-tsv "{output.consensus}"
         """
 
 
 rule module11_all:
     input:
         f"{MODULE11_DIR}/caps_scores.tsv",
+        f"{MODULE11_DIR}/caps_headline_consensus.tsv",

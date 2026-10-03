@@ -2222,33 +2222,37 @@ resources:
     runtime_min: 15
 
   # --- Module 8 ---
+  # RE-SIZED 2026-10-03 from qacct (2 jobs peaked at 1.2-2.0 GB, 17 s): 16000 MB / 30 min -> 6000 / 10.
   prep_pseudobulk_target:
     slots: 1
-    vmem_mb: 16000        # holds Target/Opn/Exp pseudobulk matrices in memory
-    runtime_min: 30
+    vmem_mb: 6000         # holds Target/Opn/Exp pseudobulk matrices in memory
+    runtime_min: 10
 
+  # RE-SIZED 2026-10-03 from qacct: POPULATION KO + sanity jobs (394 samples, full
+  # RE_pseudobulk.tsv), 16 jobs, peaked at 6.7 GB maxvmem and 194 s (KO <= 99 s,
+  # sanity <= 194 s). 32000 MB / 240 min -> 10000 / 30 (>= 1.4x memory, >= 9x time).
   linger_perturbation_ko:
     slots: 1
-    vmem_mb: 32000        # POPULATION jobs (394 samples, full RE_pseudobulk.tsv). UNMEASURED —
-                          # kept at the old value on purpose; tighten after running
-                          # `qacct` on a linger_perturbation_ko_* job.
-    runtime_min: 240
+    vmem_mb: 10000
+    runtime_min: 30
 
   # ADDED 2026-10-01 — Module 8b (cell-type) KO/sanity jobs, right-sized from qacct:
   # 40+ jobs (23 pseudo-samples) peaked at 5.2-5.3 GB maxvmem and ran 49-61 s.
-  # Set above those numbers with headroom, not to them.
+  # RE-SIZED 2026-10-03 (all 168 jobs: <= 5.3 GB, <= 112 s): 10000 MB / 45 min -> 8000 / 20.
   linger_perturbation_celltype_ko:
     slots: 1
-    vmem_mb: 10000
-    runtime_min: 45
+    vmem_mb: 8000
+    runtime_min: 20
 
-  # ADDED 2026-10-01 — Module 8c all-TF screen. FIRST GUESS, unmeasured: one
-  # chunk runs (1 + ~58) forward variants per gene. Run ONE chunk first, read its
-  # [timing] lines, then size the rest.
+  # ADDED 2026-10-01 — Module 8c all-TF screen: one chunk runs (1 + ~58) forward
+  # variants per gene. RE-SIZED 2026-10-03 from qacct: 20 chunks peaked at 6.8 GB
+  # and 2408 s (40 min, 19 running at once). 16000 MB / 360 min -> 10000 / 120.
+  # The time scales with the number of TFs per chunk: if tf_screen.n_chunks is
+  # reduced, raise runtime_min in proportion.
   tf_screen_chunk:
     slots: 1
-    vmem_mb: 16000
-    runtime_min: 360
+    vmem_mb: 10000
+    runtime_min: 120
 
   tf_screen_summarise:
     slots: 1
@@ -2274,16 +2278,19 @@ resources:
   # 2026-09-30 rewrite this rule only reads Module 4's population pseudobulk
   # and selects columns; the pseudo_bulk()-era allocation above is no longer
   # needed.
+  # RE-SIZED 2026-10-03 from qacct (14 jobs: <= 6.0 GB, <= 24 s): 32000 MB / 60 min -> 10000 / 15.
   prep_pseudobulk_target_celltype:
     slots: 1
-    vmem_mb: 32000
-    runtime_min: 60
+    vmem_mb: 10000
+    runtime_min: 15
 
   # --- Module 9 ---
+  # RE-SIZED 2026-10-03 from qacct (<= 4.4 GB, <= 409 s, bootstrap + empirical
+  # null included): 16000 MB / 60 min -> 8000 / 30. Same for validate_celltype_one.
   validate_one:
     slots: 1
-    vmem_mb: 16000
-    runtime_min: 60
+    vmem_mb: 8000
+    runtime_min: 30
 
   module9_aggregate:
     slots: 1
@@ -2299,8 +2306,8 @@ resources:
   # different --module8-dir/--network value.
   validate_celltype_one:
     slots: 1
-    vmem_mb: 16000
-    runtime_min: 60
+    vmem_mb: 8000
+    runtime_min: 30
 
   # Same per-job workload as Module 9's module9_aggregate, scaled up for
   # more rows (population + up to 20 cell types x up to 5 checks each,
@@ -2319,10 +2326,11 @@ resources:
   # single small predicted_expression.tsv (not a from-scratch GRN
   # computation) — matching validate_celltype_one's headroom rather than
   # linger_perturbation_ko's (no torch net loaded here).
+  # RE-SIZED 2026-10-03 from qacct (<= 4.6 GB, <= 25 s): 16000 MB / 60 min -> 8000 / 15.
   caps_tf_activity:
     slots: 1
-    vmem_mb: 16000
-    runtime_min: 60
+    vmem_mb: 8000
+    runtime_min: 15
 
   # caps_score — pure pandas: two small TF-indexed TSVs, one trans-
   # regulatory file, one already-aggregated validation report. Light job,

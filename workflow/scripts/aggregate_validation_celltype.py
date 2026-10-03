@@ -27,6 +27,15 @@ REVISED 2026-10-01
       aging_vec_scale   = median |shift| of this scope's vector.
     These are repeated on every row of the scope.
 
+REVISED 2026-10-03
+  * gap_minus_negctl_rho (combined report): per scope, Spearman rho of the GAP
+    reprogramming check minus rho of the negative control, repeated on every row
+    of the scope. A descriptive discrimination measure (does the same predicted
+    shift track a real reprogramming contrast more than a no-reprogramming one?);
+    it has no CI because the two contrasts use different gene sets.
+  * verdict_basis now also takes the value bootstrap_raw_rho (negative control
+    judged on the raw rho; see validate_held_out.py).
+
 CAVEAT worth restating in every report built from this file's output: every
 held-out/negative-control/aging dataset behind these numbers is BULK or
 single-cell-collapsed RNA-seq without per-cell-type ground truth — a cell-type
@@ -49,6 +58,10 @@ p.add_argument("--module8b-dir", required=True, help="module8_perturbation/cellt
 p.add_argument("--module4-data", required=True, help="module4_linger_init/data (population TG_pseudobulk.tsv)")
 p.add_argument("--gate-min-median-rho", type=float, default=0.5)
 p.add_argument("--gate-min-frac-gt03", type=float, default=0.7)
+p.add_argument("--gap-check", default="atoh1_gfi1_pou4f3_overexpression",
+               help="positive reprogramming check used for gap_minus_negctl_rho")
+p.add_argument("--negctl-check", default="negative_control_must_not_reprogram",
+               help="negative control used for gap_minus_negctl_rho")
 p.add_argument("--output-celltype-tsv", required=True)
 p.add_argument("--output-combined-tsv", required=True)
 args = p.parse_args()
@@ -189,12 +202,18 @@ combined_cols = [
     "sanity_rho", "sanity_frac_gt03", "sanity_n_samples", "sanity_pass",
     "structure_rho", "aging_vec_pop_rho", "aging_vec_scale",
     "null_n", "null_median_rho", "null_p95_rho", "null_pctile", "verdict_basis",
-    "verdict", "pass_fail",
+    "verdict", "pass_fail", "gap_minus_negctl_rho",
 ]
 combined = pd.concat(
     [population_report.reindex(columns=combined_cols), celltype_report.reindex(columns=combined_cols)],
     ignore_index=True,
 )
+_rho = combined.pivot_table(index="scope", columns="check", values="spearman_rho", aggfunc="first")
+for _c in (args.gap_check, args.negctl_check):
+    if _c not in _rho.columns:
+        raise ValueError(f"check {_c!r} not found in the combined report (checks present: {list(_rho.columns)}) — "
+                         f"gap_minus_negctl_rho needs both --gap-check and --negctl-check")
+combined["gap_minus_negctl_rho"] = combined["scope"].map(_rho[args.gap_check] - _rho[args.negctl_check])
 combined.to_csv(args.output_combined_tsv, sep="\t", index=False)
 
 print(f"Wrote {args.output_combined_tsv}: {len(combined)} rows "

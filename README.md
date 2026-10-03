@@ -109,6 +109,7 @@ own target (see [Usage](#usage)).
 ├── setup_scripts/                   # one-time setup, run outside the Snakemake DAG
 │   ├── setup_linger.sh              #   conda envs, mm10 refs, HOMER, LINGER provide_data
 │   ├── download_datasets.sh         #   downloads and extracts all GEO accessions
+│   ├── download_gold_standard.sh    #   GenAge / CellAge raw tables (provenance for the frozen gold table)
 │   ├── patch_LL_net_RE_ordering.py  #   idempotent patch for a bug in installed LingerGRN
 │   └── patch_LL_net_cis_reg_load.py #   idempotent patch for a second LingerGRN bug
 ├── other_helper_scripts/            # one-off inspection/verification scripts, not in the DAG

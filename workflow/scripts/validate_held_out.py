@@ -30,14 +30,22 @@ For mode == "expression_shift" (reprogramming checks + negative control):
         is allowed ONLY for checks with spec["scored"] == False (descriptive).
   * VERDICT (replaces "rho > 0 and AUROC > 0.5"): gene-bootstrap CI (B =
     --bootstrap-n, seed --bootstrap-seed) of the EXCESS Spearman rho over a
-    LEVEL-ONLY NULL (rho between the real shift and sign x the model's own
-    baseline level — what a predictor that knows nothing but gene level
-    achieves), judged against --min-excess:
+    LEVEL-ONLY NULL (|rho| between the real shift and the model's own baseline
+    expression level — what a predictor that knows nothing but gene level
+    achieves, with its direction chosen with hindsight; REVISED 2026-10-03: this
+    was rho with sign x level, so a verdict depended on the +-1 convention and a
+    negative value was clamped to 0, i.e. the baseline was never charged),
+    judged against --min-excess:
         positive check : PASS if excess CI lower bound  >  min_excess,
                          FAIL if CI upper bound         <  min_excess,
                          else INCONCLUSIVE
-        negative control (invert_pass): PASS if CI upper bound < min_excess,
-                         FAIL if CI lower bound > min_excess, else INCONCLUSIVE
+        negative control (invert_pass): judged on the RAW rho CI, not the excess
+                         (REVISED 2026-10-03: subtracting the level null makes a
+                         negative control easier to pass, the wrong direction
+                         for a leakage test): PASS if rho CI upper bound <
+                         min_excess, FAIL if rho CI lower bound > min_excess,
+                         else INCONCLUSIVE; verdict_basis = bootstrap_raw_rho.
+                         With the empirical null (below) that decides instead.
         NOT_EVALUABLE  if the predicted shift is (numerically) constant
                          (SD < --noop-pred-sd: e.g. the knocked-out TF is not
                          expressed in this scope) or < --min-genes genes
@@ -254,7 +262,8 @@ p.add_argument("--sanity-tsv", default=None,
 p.add_argument("--bootstrap-n", type=int, default=1000)
 p.add_argument("--bootstrap-seed", type=int, default=0)
 p.add_argument("--min-excess", type=float, default=0.05,
-               help="minimum excess Spearman rho over the level-only null that counts as signal")
+               help="minimum excess Spearman rho over the level-only null that counts as signal (for a negative control: the "
+                    "same bar applied to the RAW rho)")
 p.add_argument("--noop-pred-sd", type=float, default=1e-6,
                help="predicted-shift SD below this => NOT_EVALUABLE")
 p.add_argument("--min-genes", type=int, default=100)
@@ -409,9 +418,9 @@ def _bootstrap_excess(real, pred, level, B, seed):
     for i in range(B):
         idx = rng.integers(0, n, n)
         r = _spearman(real[idx], pred[idx])
-        nl = _spearman(real[idx], level[idx])
+        nl = abs(_spearman(real[idx], level[idx]))
         rho_b[i] = r
-        exc_b[i] = r - max(nl if np.isfinite(nl) else 0.0, 0.0)
+        exc_b[i] = r - (nl if np.isfinite(nl) else 0.0)
     ok = np.isfinite(exc_b)
     return (np.percentile(rho_b[ok], [2.5, 97.5]), np.percentile(exc_b[ok], [2.5, 97.5]))
 
@@ -509,7 +518,7 @@ if spec["mode"] == "expression_shift":
 
     common = real_shift.index.intersection(predicted_shift.index)
     real_c, pred_c = real_shift.loc[common], predicted_shift.loc[common]
-    lvl_c = (base_mean.loc[common] * spec["sign"])
+    lvl_c = base_mean.loc[common]   # sign-free: the level null uses |rho|
     finite = real_c.notna() & pred_c.notna() & lvl_c.notna()
     if (~finite).sum():
         print(f"dropping {int((~finite).sum())}/{len(finite)} NaN entries before scoring")
@@ -526,17 +535,22 @@ if spec["mode"] == "expression_shift":
 
     level_null, exc, exc_lo, exc_hi, rho_lo, rho_hi = (np.nan,) * 6
     if evaluable:
-        level_null = _spearman(real_c.values, lvl_c.values)
-        exc = rho - max(level_null if np.isfinite(level_null) else 0.0, 0.0)
+        level_null = abs(_spearman(real_c.values, lvl_c.values))
+        exc = rho - (level_null if np.isfinite(level_null) else 0.0)
         (rho_lo, rho_hi), (exc_lo, exc_hi) = _bootstrap_excess(
             real_c.values, pred_c.values, lvl_c.values, args.bootstrap_n, args.bootstrap_seed)
-        print(f"rho={rho:.3f} [{rho_lo:.3f}, {rho_hi:.3f}]  level-only null rho={level_null:.3f}  "
+        print(f"rho={rho:.3f} [{rho_lo:.3f}, {rho_hi:.3f}]  level-only null |rho|={level_null:.3f}  "
               f"excess={exc:.3f} [{exc_lo:.3f}, {exc_hi:.3f}] (min_excess={args.min_excess})")
     else:
         print(f"NOT EVALUABLE: n_genes={len(real_c)} (min {args.min_genes}), predicted-shift SD={pred_sd:.3g} "
               f"(min {args.noop_pred_sd:g}) — the knockout has no effect in this scope")
-    verdict = _verdict(scored, spec.get("invert_pass", False), evaluable, exc_lo, exc_hi, args.min_excess)
-    verdict_basis = "bootstrap_excess"
+    invert = spec.get("invert_pass", False)
+    if invert:   # negative control: judged on the raw rho CI (see docstring)
+        verdict = _verdict(scored, True, evaluable, rho_lo, rho_hi, args.min_excess)
+        verdict_basis = "bootstrap_raw_rho"
+    else:
+        verdict = _verdict(scored, False, evaluable, exc_lo, exc_hi, args.min_excess)
+        verdict_basis = "bootstrap_excess"
     null_n, null_median, null_p95, null_pct = np.nan, np.nan, np.nan, np.nan
     if args.null_screen_dir and evaluable:
         null_rhos, n_ids = _screen_null_rhos(args.null_screen_dir, args.null_mode, set(args.null_exclude_tfs),
