@@ -1,24 +1,43 @@
 #!/usr/bin/env bash
 # =============================================================================
-# download_datasets.sh  —  LINGER Pipeline: Full GEO Dataset Download
+# download_datasets.sh  —  LINGER Pipeline: GEO download, extract and verify
 # Tailored for University of Edinburgh Eddie HPC, scratch space
 # =============================================================================
 #
-# USAGE (in tmux session 2 — fully independent from setup):
+# One run takes a fresh (or purged) scratch to a tree the workflow can read:
+#   1. DOWNLOAD  every GEO supplementary folder (wget --continue)
+#   2. EXTRACT   every *_RAW.tar next to itself (the workflow reads the files
+#                inside the tars, not the tars). A tar already extracted is
+#                skipped (size marker <tar>.extracted); every member is checked
+#                to exist afterwards; a failure is listed and makes the script
+#                exit non-zero.
+#   3. LOCK      06_held_out is made read-only (chmod 555) after its extraction
+#   4. VERIFY    other_helper_scripts/verify_inputs.py walks config_eddie.yaml
+#                and checks that every raw input the workflow reads exists.
+#                Exit status 1 if anything is missing or still un-extracted.
+#
+# USAGE (in tmux; extraction is disk-heavy, so use an interactive node):
 #   ssh s2906787@eddie.ecdf.ed.ac.uk
 #   tmux new-session -s download
-#   bash /exports/eddie/scratch/s2906787/download_datasets.sh \
+#   qlogin -l h_vmem=8G -l h_rt=48:00:00
+#   cd /exports/eddie/scratch/s2906787/linger_pipeline/code
+#   bash setup_scripts/download_datasets.sh \
 #        /exports/eddie/scratch/s2906787/cochlear_datasets
 #
-# Runs on a LOGIN NODE — no qlogin/module needed (wget only).
-# Re-running is safe — wget --continue resumes incomplete files.
+# Re-running is safe: wget --continue resumes incomplete files, extracted tars
+# are skipped, 06_held_out is unlocked for the run and locked again at the end.
+#
+# Python for step 4: the snakemake_eddie env's python (has PyYAML), override with
+#   VERIFY_PY=/path/to/python bash setup_scripts/download_datasets.sh ...
 #
 # Watch progress:
 #   tail -f /exports/eddie/scratch/s2906787/cochlear_datasets/download.log
 #   grep "file(s)" /exports/eddie/scratch/s2906787/cochlear_datasets/download.log
 #
 # Estimated time  : 12-48 hours
-# Estimated space : 150-500 GB
+# Estimated space : 150-500 GB downloaded, plus the extracted copy of every
+#                   RAW.tar (the tars are kept as provenance), roughly double
+#                   the RAW.tar share
 # =============================================================================
 
 set -uo pipefail
@@ -27,6 +46,13 @@ DATA_ROOT="${1:-/exports/eddie/scratch/s2906787/cochlear_datasets}"
 LOG="${DATA_ROOT}/download.log"
 NTHREADS="${NTHREADS:-8}"
 mkdir -p "$DATA_ROOT"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(dirname "$SCRIPT_DIR")"
+VERIFY_PY="${VERIFY_PY:-/exports/csce/eddie/biology/groups/bioinfmsc/anaconda/envs/s2906787/snakemake_eddie/bin/python}"
+# one line per tar that failed to extract (appended from background jobs too)
+EXTRACT_FAILS="${DATA_ROOT}/.extract_failures"
+: > "$EXTRACT_FAILS"
 
 log()  { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG"; }
 warn() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARN:  $*" | tee -a "$LOG"; }
@@ -40,10 +66,54 @@ sep
 log "LINGER Dataset Download"
 log "  DATA_ROOT = ${DATA_ROOT}"
 log "  SCRATCH   = ${AVAIL_GB} GB available"
-(( AVAIL_GB < 600 )) && warn "  Less than 600 GB free — monitor with: df -h /exports/eddie/scratch/s2906787"
+(( AVAIL_GB < 800 )) && warn "  Less than 800 GB free (downloads + extracted copies) — monitor with: df -h /exports/eddie/scratch/s2906787"
 log "  Follow with: tail -f ${LOG}"
 log "  Count done: grep 'file(s)' ${LOG}"
 sep
+
+# =============================================================================
+# HELPER: extract_raw_tars  <DEST_DIR>
+#
+# GEO ships per-sample files inside <GSE>_RAW.tar. The workflow reads the
+# extracted per-sample files (GSM*_matrix.mtx.gz, *.h5, fragments, ...), so
+# every tar is unpacked next to itself. The tar is kept (provenance, and a
+# purge only needs a re-run of this script).
+#   - skipped when <tar>.extracted holds the tar's current byte size
+#   - after tar -x, every member listed by tar -t must exist in DEST_DIR
+#   - on any failure the tar is appended to ${EXTRACT_FAILS}; no marker is
+#     written, so the next run retries it
+#   - one level only: a member that is itself an archive is reported, not opened
+# =============================================================================
+extract_raw_tars() {
+    local dest_dir="$1" tar_file size marker missing nested
+    for tar_file in "$dest_dir"/*_RAW.tar; do
+        [ -e "$tar_file" ] || continue
+        size=$(stat -c %s "$tar_file")
+        marker="${tar_file}.extracted"
+        if [ -f "$marker" ] && [ "$(cat "$marker" 2>/dev/null)" = "$size" ]; then
+            log "    [skip] $(basename "$tar_file") already extracted"
+            continue
+        fi
+        log "    extracting $(basename "$tar_file") ..."
+        if ! tar -xf "$tar_file" -C "$dest_dir" 2>>"$LOG"; then
+            warn "    EXTRACT FAILED: ${tar_file}"
+            echo "$tar_file" >> "$EXTRACT_FAILS"
+            continue
+        fi
+        missing=$(tar -tf "$tar_file" 2>>"$LOG" | while IFS= read -r m; do
+                      [ -e "${dest_dir}/${m}" ] || echo "$m"
+                  done | head -n 5)
+        if [ -n "$missing" ]; then
+            warn "    EXTRACT INCOMPLETE: ${tar_file} (not found after extraction: $(echo "$missing" | tr '\n' ' '))"
+            echo "$tar_file" >> "$EXTRACT_FAILS"
+            continue
+        fi
+        nested=$(tar -tf "$tar_file" 2>>"$LOG" | grep -Ei '\.(tar|tar\.gz|tgz|zip)$' | head -n 3)
+        [ -n "$nested" ] && warn "    $(basename "$tar_file") holds nested archive(s), NOT opened: $(echo "$nested" | tr '\n' ' ')"
+        printf '%s\n' "$size" > "$marker"
+        log "    extracted $(basename "$tar_file") OK"
+    done
+}
 
 # =============================================================================
 # HELPER: download_geo_suppl  <ACCESSION>  <DEST_DIR>
@@ -85,6 +155,8 @@ download_geo_suppl() {
         "${suppl_url}" \
         2>>"$LOG" \
     || warn "  [${accession}] wget returned non-zero — partial download or empty suppl dir"
+
+    extract_raw_tars "$dest_dir"
 
     local n size
     n=$(find "$dest_dir" -maxdepth 1 -type f 2>/dev/null | wc -l)
@@ -186,6 +258,7 @@ download_geo_suppl "GSE181307"  "${CHROM}/GSE181307_cutrun"        # additional 
 download_geo_suppl "GSE181310"  "${CHROM}/GSE181310_atac"          # ATAC regulatory prior
 download_geo_suppl "GSE288375"  "${CHROM}/GSE288375_ihc_ohc_rna"   # IHC/OHC subtype RNA
 download_geo_suppl "GSE288376"  "${CHROM}/GSE288376_ihc_ohc_atac"  # IHC/OHC subtype ATAC ★
+download_geo_suppl "GSE150000"  "${CHROM}/GSE150000_P1SC_H3K4me3"   # SC maturation H3K4me3 (config: chromatin_prior_extra)
 
 # =============================================================================
 # SECTION 3 — MODEL CONSTRUCTION DATA
@@ -232,6 +305,10 @@ done
 wait
 log "  All bulk RNA-seq downloads complete"
 
+# GSE150002 (Notch/DAPT) is bulk RNA read by extra_bulk_rna_inputs from
+# 04_bulk_rnaseq/GSE150002_P1SC_reprogramming (config_eddie.yaml, GSE150002_* entries).
+download_geo_suppl "GSE150002"  "${BULK}/GSE150002_P1SC_reprogramming"
+
 # =============================================================================
 # SECTION 5 — TUNING VALIDATION DATA
 # =============================================================================
@@ -239,10 +316,13 @@ log ""
 log "=== SECTION 5: Tuning Validation Datasets ==="
 TUNE="${DATA_ROOT}/05_tuning_validation"
 
-download_geo_suppl "GSE150000"  "${TUNE}/GSE150000_SC_maturation"    # SC maturation + enhancer decommissioning (RNA-seq + ATAC)
-download_geo_suppl "GSE150002"  "${TUNE}/GSE150002_notch_dapt"       # Notch/DAPT regeneration validation (RNA-seq + ATAC)
-download_geo_suppl "GSE182202"  "${TUNE}/GSE182202_gap_reprogramming" # A/GA/GAP reprogramming P8/P15 (also GRN prior — data already in 01_multiome)
-download_geo_suppl "GSE224563"  "${TUNE}/GSE224563_mature_SC_barrier" # Mature SC barrier P70 (also GRN prior — data already in 01_multiome)
+# GSE150000 moved to Section 2 (02_chromatin_priors/GSE150000_P1SC_H3K4me3): it is H3K4me3
+#   mark data and chromatin_prior_extra reads it from there (config_eddie.yaml).
+# GSE150002 moved to Section 4 (04_bulk_rnaseq/GSE150002_P1SC_reprogramming): it is
+#   bulk RNA and that is where the config reads it.
+# GSE182202 and GSE224563 are NOT downloaded a second time here: the workflow
+#   reads them from 01_multiome (Section 1) and no config entry points at a
+#   05_tuning_validation copy (it would only duplicate ~44 GB).
 download_geo_suppl "GSE234926"  "${TUNE}/GSE234926_P90_sensory"
 download_geo_suppl "GSE165662"  "${TUNE}/GSE165662_adult_stria"
 download_geo_suppl "GSE189798"  "${TUNE}/GSE189798"
@@ -260,6 +340,9 @@ download_geo_suppl "GSE316951"  "${TUNE}/GSE316951"
 log ""
 log "=== SECTION 6: Held-Out Validation Datasets [FROZEN] ==="
 HELD="${DATA_ROOT}/06_held_out"
+
+# a previous run left this read-only; unlock so wget/tar can write, relocked below
+chmod -R u+w "${HELD}" 2>/dev/null || true
 
 download_geo_suppl "GSE224627"  "${HELD}/GSE224627_GAP_reprogramming"  # ★ primary GAP test
 download_geo_suppl "GSE233559"  "${HELD}/GSE233559_Tbx2_OHC_IHC"       # Tbx2 conversion
@@ -395,29 +478,45 @@ log "Total:"
 du -sh "${DATA_ROOT}" 2>/dev/null | tee -a "$LOG"
 sep
 
+# =============================================================================
+# EXTRACTION RESULT + INPUT VERIFICATION
+# =============================================================================
+RC=0
 log ""
-log "POST-DOWNLOAD CHECKLIST"
+if [ -s "$EXTRACT_FAILS" ]; then
+    warn "RAW.tar extraction FAILED for:"
+    sort -u "$EXTRACT_FAILS" | while IFS= read -r t; do warn "   ${t}"; done
+    RC=1
+else
+    log "All RAW.tar files extracted and member-checked."
+fi
+
 log ""
-log "1. Check multiome folders have matrix files (not just FASTQs):"
-log "   for d in ${DATA_ROOT}/01_multiome/*/; do"
-log "     echo \"=== \$(basename \$d) ===\""
-log "     ls \"\$d\" | grep -E 'barcodes|features|matrix|peaks|fragments|h5'"
-log "   done"
+log "Verifying every raw input the workflow reads (config_eddie.yaml) ..."
+VERIFY_SCRIPT="${REPO_DIR}/other_helper_scripts/verify_inputs.py"
+VERIFY_CFG="${REPO_DIR}/config/config_eddie.yaml"
+if [ ! -x "$VERIFY_PY" ] || [ ! -f "$VERIFY_SCRIPT" ] || [ ! -f "$VERIFY_CFG" ]; then
+    warn "Cannot run the verifier (python: ${VERIFY_PY}, script: ${VERIFY_SCRIPT}, config: ${VERIFY_CFG})."
+    warn "Run it by hand from the repo root:  python other_helper_scripts/verify_inputs.py --config config/config_eddie.yaml"
+    RC=1
+elif "$VERIFY_PY" "$VERIFY_SCRIPT" --config "$VERIFY_CFG" 2>&1 | tee -a "$LOG"; [ "${PIPESTATUS[0]}" -ne 0 ]; then
+    warn "Input verification FAILED — see the list above. Do not start Snakemake yet."
+    RC=1
+else
+    log "Input verification passed."
+fi
+
 log ""
-log "2. Check chromatin priors:"
-log "   ls ${DATA_ROOT}/02_chromatin_priors/GSE305205_hic/    # expect .hic or .cool"
-log "   ls ${DATA_ROOT}/02_chromatin_priors/GSE150386*/       # expect .bed/.narrowPeak"
+log "Held-out lock check:   ls -ld ${DATA_ROOT}/06_held_out/   # should show dr-xr-xr-x (555)"
 log ""
-log "3. Held-out lock:"
-log "   ls -ld ${DATA_ROOT}/06_held_out/   # should show dr-xr-xr-x (555)"
-log ""
-log "4. SRA fallback (if matrix files missing from a multiome dataset):"
+log "SRA fallback (only if a multiome dataset has no matrix files on GEO):"
 log "   module load anaconda"
 log "   source \$(conda info --base)/etc/profile.d/conda.sh"
 log "   conda activate linger_tools"
-log "   source ${DATA_ROOT}/../download_datasets.sh   # loads download_sra function"
+log "   source ${SCRIPT_DIR}/download_datasets.sh   # loads download_sra function"
 log "   download_sra GSE157398 ${DATA_ROOT}/01_multiome/GSE157398_sra"
 log ""
 log "Full log: ${LOG}"
 log "Log size: $(du -sh "${LOG}" | cut -f1)  (kept small by --quiet flag)"
 sep
+exit "$RC"

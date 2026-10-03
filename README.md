@@ -108,13 +108,14 @@ own target (see [Usage](#usage)).
 │   └── linger.yaml                  # LINGER env spec — documentation only (see Requirements)
 ├── setup_scripts/                   # one-time setup, run outside the Snakemake DAG
 │   ├── setup_linger.sh              #   conda envs, mm10 refs, HOMER, LINGER provide_data
-│   ├── download_datasets.sh         #   downloads and extracts all GEO accessions
+│   ├── download_datasets.sh         #   downloads, extracts RAW.tars, locks held-out, verifies inputs
 │   ├── download_gold_standard.sh    #   GenAge / CellAge raw tables (provenance for the frozen gold table)
 │   ├── patch_LL_net_RE_ordering.py  #   idempotent patch for a bug in installed LingerGRN
 │   └── patch_LL_net_cis_reg_load.py #   idempotent patch for a second LingerGRN bug
 ├── other_helper_scripts/            # one-off inspection/verification scripts, not in the DAG
 │   ├── h5ad_breakdown.py            #   per-cluster DE genes + sample composition
 │   ├── h5ad_check.py                #   marker expression spot-checks for chosen clusters
+│   ├── verify_inputs.py             #   fail-loud check that every raw input in the config exists
 │   ├── verify_loader_regression.py  #   regression check for bulk_rna_loader.py changes
 │   └── sanity_check_motif_naming.sh #   HOMER PositionID naming check on a 10-peak slice
 └── workflow/
