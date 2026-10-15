@@ -572,8 +572,19 @@ if spec["mode"] == "expression_shift":
         print(f"rho={rho:.3f} [{rho_lo:.3f}, {rho_hi:.3f}]  level-only null |rho|={level_null:.3f}  "
               f"excess={exc:.3f} [{exc_lo:.3f}, {exc_hi:.3f}] (min_excess={args.min_excess})")
     else:
-        print(f"NOT EVALUABLE: n_genes={len(real_c)} (min {args.min_genes}), predicted-shift SD={pred_sd:.3g} "
-              f"(min {args.noop_pred_sd:g}) — the knockout has no effect in this scope")
+        # CHANGED 2026-10-16: distinguish an ID-matching failure from a genuinely inert knockout.
+        if len(common) < args.min_genes:
+            print(f"NOT EVALUABLE (gene-ID overlap): only {len(common)} genes shared between the real data "
+                  f"({len(real_shift)} genes) and the model ({len(predicted_shift)} genes); need >= {args.min_genes}.\n"
+                  f"  real-data IDs  e.g. {list(real_shift.index[:5])}\n"
+                  f"  model gene IDs e.g. {list(predicted_shift.index[:5])}\n"
+                  f"  -> usually the dataset uses Entrez/Ensembl IDs: set `symbol_column` or `entrez_symbol_map` in the config entry.")
+        elif pred_sd < args.noop_pred_sd:
+            print(f"NOT EVALUABLE (no-op knockout): predicted-shift SD={pred_sd:.3g} < {args.noop_pred_sd:g} "
+                  f"- the knockout has no effect in this scope")
+        else:
+            print(f"NOT EVALUABLE: n_genes after NaN filtering={len(real_c)} (min {args.min_genes}); "
+                  f"shared before filtering={len(common)}")
     invert = spec.get("invert_pass", False)
     if invert:   # negative control: judged on the raw rho CI (see docstring)
         verdict = _verdict(scored, True, evaluable, rho_lo, rho_hi, args.min_excess)

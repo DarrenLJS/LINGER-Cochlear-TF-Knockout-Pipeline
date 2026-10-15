@@ -375,54 +375,37 @@ All outputs are written under `{scratch}/`, never into the repository.
 
 ## Current results
 
-Headline numbers from the most recent full run. Figures referenced are from
-the companion figure pipeline.
+Headline numbers from the most recent full run (2026-10-15/16 reruns, including Modules 9c, 11b and 12). Numbers come from the
+report files under `$SCRATCH` (`validation_report_combined.tsv`, `panel_report.tsv`, `metrics_*.tsv`, `caps_scores.tsv`,
+`celltype_funnel_summary.tsv`); where a figure here disagrees with a report, the report wins.
 
-- **Modules 1–3** — four samples, roughly 11,700 cells after QC (most from
-  the P1 and P8 samples); 29 Leiden clusters annotated into 22 cell types.
-- **Module 6** — population network plus 22 cell-type-specific networks.
+- **Modules 1–3** — four samples, roughly 11,700 cells after QC; 29 Leiden clusters.
+- **Cell-type funnel** (`celltype_funnel_summary.tsv`) — 29 clusters -> **16** labelled cell types -> 16 with networks -> **14**
+  perturbed -> 14 CAPS-evaluated. Earlier "22 / 20 cell types" statements were wrong and are superseded.
 - **Module 7** — TF activity for 586 TFs across 41 datasets.
-- **Module 8** — sanity check median Spearman ρ = **0.790** across 23,156
-  genes between the reconstructed forward pass and real pseudobulk
-  expression, so knockout output is treated as usable. Predicted knockout
-  effects are small: no well-expressed gene (0 of 414 tested) exceeds the
-  fold-change threshold for any of the five knockouts.
-- **Module 8b** — per-cell-type sanity ρ ranges from 0.08 to 0.38; only 3 of
-  20 cell types (spiral ligament fibrocyte, lateral wall fibrocyte, root
-  cell) exceed the ρ = 0.3 rule-of-thumb threshold.
-- **Module 9 (population)**
-  - `atoh1_gfi1_pou4f3_overexpression` (GSE224627): **PASS** (ρ = 0.44, AUROC = 0.77).
-  - `tbx2_conversion` (GSE233559): **FAIL** (ρ = −0.60, AUROC = 0.75). AUROC
-    alone looks acceptable, but the sign-adjusted correlation runs the wrong way.
-  - `negative_control_must_not_reprogram` (GSE281207): **FAIL** — the control
-    scores as strongly (ρ = 0.72) as the positive checks, so the model does
-    not separate "should reprogram" from "should not".
-  - `aging_vector_support` (datasets scored against the GSE274279 reference
-    vector): near zero at population level (ρ ≈ −0.03 to 0.20).
-- **Module 9b (per cell type)**
-  - Atoh1/Gfi1/Pou4f3 overexpression passes in all 20 cell types (ρ 0.04–0.38).
-  - Tbx2 conversion fails in all 20 on sign (ρ −0.06 to −0.64).
-  - The negative control fails in 18 of 20 cell types.
-  - Aging-support correlations are uniformly high per cell type (ρ ≈ 0.7–0.9),
-    but each cell type's aging reference vector barely correlates with the
-    population one (ρ ≈ 0.02). Both sides of each comparison are scored
-    through the same cell-type network, so these correlations likely reflect
-    shared network structure rather than agreement about aging. **Do not
-    read them as validation of the aging signal.**
-- **Module 10** — `cis_RE_TG` vs Hi-C loops is near chance (AUROC 0.51–0.52)
-  in every cell type, as expected when the edge set is fixed at population
-  level. `TF_RE_binding` vs CUT&RUN varies by cell type and TF (Atoh1 AUROC
-  ≈ 0.57–0.78, Pou4f3 ≈ 0.53–0.66), a real cell-type-sensitive signal.
-- **Module 11** — 105 (knockout, scope) CAPS values. A few rows dominate:
-  Tbx2 knockout in root cells (CAPS ≈ 300) and the triple knockout in hair
-  cells (≈ 180); most |CAPS| values are below 20. Hair-cell scopes score
-  positive for all five knockouts. Confidence weights come from the
-  per-cell-type sanity ρ (0.08–0.38), so every CAPS value carries low
-  confidence.
+- **Module 8** — sanity-check median Spearman rho = **0.804** over 23,070 genes (the earlier 0.790 / 23,156 was a previous run).
+  Predicted knockout effects are small.
+- **Module 9 / 9b** — verdicts use the excess Spearman rho over a level-only null. Screened scopes (population, Greater epithelial
+  ridge, Interdental cell, Non-sensory epithelium, Pillar cell, Supporting cell) judge the negative control against an empirical null
+  (PASS if null percentile < 0.95), which turned the Tmie negative control to PASS in 5 screened scopes; positive-check verdicts are
+  unchanged and rho is reproducible. The AUROC panel (Fig 7b, supplementary) does not discriminate: it is high everywhere, including the
+  negative control.
+- **Module 9c (independent panel)** — 0 of 3 eligible entries pass; the GSE86204 arms (exploratory, additive-effector approximation)
+  all fail. The GSE171921 Pknox2 entry was NOT_EVALUABLE because the file is keyed by Entrez ID; it is now mapped to symbols through
+  `entrez_symbol_map` (run `setup_scripts/download_gene_annotation.sh` first) and must be rerun. Panel studies have 2–3 replicates, so the
+  gene-bootstrap CIs understate the real uncertainty.
+- **Module 10** — `cis_RE_TG` vs Hi-C is near chance (AUROC about 0.51). The cis RE-TG edge sets are identical across cell types,
+  so this is expected; it is a limitation of the edge set, not a cell-type result.
+- **Module 11 / 11b (CAPS and screen)** — Tbx2 is the only robust CAPS signal, and its own expression check fails. Screen rows no
+  longer enter `caps_scores.tsv` (a glob bug had leaked them in, giving NaN `ko_id` rows and inflated counts); the population rank among
+  screened single-TF knockouts is now the separate column `population_screen_rank`.
+- **Module 12 (metrics)** — the model beats the level-only baseline in only 2 of 9 contrasts, both from the GAP dataset. Directional
+  gold-standard ranking (tiers B/C/D) shows no usable signal (tier C sign accuracy about 0.5); tier A (cochlear curated) is empty.
+  Not implemented because a definition was not available: the I/R/D indices and a ridge baseline.
 
-Overall this is a real, partly negative result rather than a pipeline
-failure: one population check passes, the negative control does not
-discriminate, and the aging signal does not validate externally.
+Overall this is a real, mostly negative result rather than a pipeline failure: the model reproduces the baseline expression structure
+(sanity rho about 0.80), but its predicted knockout effects do not beat a level-only baseline on independent data, and CAPS rankings do
+not agree with gold-standard TF direction.
 
 ---
 
@@ -516,6 +499,8 @@ discriminate, and the aging signal does not validate externally.
 Detailed rationale for each fix is in the docstring or header comment of the
 affected script or rule file.
 
+- **2026-10-16** — Fixed: screen rows leaking into `caps_scores.tsv`; Pknox2 panel entry (Entrez->symbol map); misleading zero-overlap
+  message in `validate_held_out.py`; funnel-derived cell-type counts; figure fixes (fig06 now matplotlib, fig09–12 layout).
 - **2026-09-23** — Modules 9b and 11 confirmed run on real data; cell-type
   counts updated (22 annotated, 20 with ≥ 100 cells). README and SETUP.md
   reorganised.

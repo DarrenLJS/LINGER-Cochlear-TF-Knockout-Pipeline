@@ -285,6 +285,7 @@ rule module11_aggregate:
     input:
         caps_scores = _module11_caps_targets(),
         validation_report_combined = f"{MODULE9B_DIR}/validation_report_combined.tsv",
+        screen_caps_all = f"{MODULE11_DIR}/screen_caps_all.tsv",
     output:
         caps = f"{MODULE11_DIR}/caps_scores.tsv",
         consensus = f"{MODULE11_DIR}/caps_headline_consensus.tsv",
@@ -304,6 +305,7 @@ rule module11_aggregate:
         {LINGER_PYTHON} workflow/scripts/aggregate_caps_scores.py \
             --module11-dir "{params.module11_dir}" \
             --validation-report-combined "{input.validation_report_combined}" \
+            --screen-caps-tsv "{input.screen_caps_all}" \
             --gap-sample-id "{CAPS_GAP_SAMPLE_ID}" \
             --output-tsv "{output.caps}" \
             --output-consensus-tsv "{output.consensus}"

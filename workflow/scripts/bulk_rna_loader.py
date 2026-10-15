@@ -330,6 +330,9 @@ def _select_columns(df, entry, source_name=""):
     return _coerce_numeric_columns(df, deny_list=deny_list, source_name=source_name)
 
 
+_ENTREZ_MAP_CACHE = {}
+
+
 def _resolve_var_names(df, index_values, entry, source_name=""):
     """
     NOTE 2026-09-09: TF_activity.regulon() intersects RNA.index (i.e.
@@ -353,6 +356,30 @@ def _resolve_var_names(df, index_values, entry, source_name=""):
     `df` must still have symbol_column as an actual column (i.e. called
     BEFORE any column-filtering step that would drop it).
     """
+    # ADDED 2026-10-16: `entrez_symbol_map` (config key) = TSV with columns GeneID, Symbol (NCBI gene_info extract written by
+    # setup_scripts/download_gene_annotation.sh). Use it when the file's only gene identifier is a numeric Entrez ID
+    # (e.g. GSE171921's `EntrezGeneid`). Unmapped ids keep their original id (they cannot match the model genes anyway);
+    # the loader refuses to continue if fewer than half of the ids map, because that means the wrong species/ID type.
+    map_path = entry.get("entrez_symbol_map") if entry else None
+    if map_path:
+        if map_path not in _ENTREZ_MAP_CACHE:
+            if not os.path.exists(map_path):
+                raise FileNotFoundError(
+                    f"[{source_name}] entrez_symbol_map {map_path!r} not found - run setup_scripts/download_gene_annotation.sh")
+            m = pd.read_csv(map_path, sep="\t", dtype=str)
+            _ENTREZ_MAP_CACHE[map_path] = dict(zip(m["GeneID"], m["Symbol"]))
+        mp = _ENTREZ_MAP_CACHE[map_path]
+        ids = [str(g).split(".")[0] for g in index_values]
+        mapped = [mp.get(g) for g in ids]
+        n_ok = sum(x is not None for x in mapped)
+        if n_ok < 0.5 * len(ids):
+            raise ValueError(
+                f"[{source_name}] entrez_symbol_map mapped only {n_ok} of {len(ids)} ids (examples: {ids[:5]}) - "
+                f"wrong species or ids are not Entrez Gene IDs")
+        out = [m_ if m_ is not None else i_ for m_, i_ in zip(mapped, ids)]
+        _log(f"[{source_name}] var_names set from entrez_symbol_map: {n_ok} of {len(ids)} ids mapped to symbols "
+             f"({len(ids) - n_ok} unmapped keep their id; {len(out) - len(set(out))} duplicate symbols)")
+        return out
     symbol_column = entry.get("symbol_column") if entry else None
     if not symbol_column:
         return [str(g) for g in index_values]

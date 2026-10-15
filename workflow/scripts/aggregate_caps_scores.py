@@ -45,12 +45,21 @@ p.add_argument("--output-consensus-tsv", required=True,
                help="per-ko_id consensus over the headline (GAP-validated) scopes")
 p.add_argument("--validation-report-combined", default=None,
                help="validation_report_combined.tsv; supplies the per-scope negative-control verdict / rho")
+p.add_argument("--screen-caps-tsv", default=None,
+               help="module11_caps/screen_caps_all.tsv; ONLY used to add population_screen_rank / population_screen_n "
+                    "(rank of a single-TF knockout among all screened TFs at population scope). Screen rows never enter "
+                    "caps_scores.tsv.")
 p.add_argument("--gap-sample-id", default="GSE224627_GAP_reprogramming")
 p.add_argument("--negctl-check", default="negative_control_must_not_reprogram")
 args = p.parse_args()
 
 rows = []
+# FIXED 2026-10-16: the glob used to match screen/<scope>_screen_caps.tsv too, so the all-TF screen rows
+# (empty ko_id) leaked into caps_scores.tsv depending on timing. The screen lives in its own folder and is
+# excluded here; only {scope}/{ko_id}_caps.tsv per-knockout files are collected.
 for path in sorted(glob.glob(os.path.join(args.module11_dir, "*", "*_caps.tsv"))):
+    if os.path.basename(os.path.dirname(path)) == "screen" or path.endswith("_screen_caps.tsv"):
+        continue
     rows.append(pd.read_csv(path, sep="\t"))
 
 COLS = ["scope", "ko_id", "tfs", "rank_in_scope", "status", "CAPS", "sign_adjusted_shift",
@@ -64,13 +73,27 @@ COLS = ["scope", "ko_id", "tfs", "rank_in_scope", "status", "CAPS", "sign_adjust
 
 CONSENSUS_COLS = ["ko_id", "tfs", "n_headline_scopes", "headline_scopes", "median_rank", "median_CAPS",
                   "median_CAPS_noieg", "majority_sign", "sign_agreement", "n_ok_scopes",
-                  "population_CAPS", "population_rank", "population_gap_verdict", "median_rank_pct",
+                  "population_CAPS", "population_rank", "population_gap_verdict",
+                  "population_screen_rank", "population_screen_n", "median_rank_pct",
                   "n_negctl_pass", "median_gap_minus_negctl_rho"]
+
+
+def _screen_population_ranks(path):
+    """tf -> (rank, n) among ok single-TF knockouts at population scope in the all-TF screen (1 = highest CAPS)."""
+    if not path or not os.path.exists(path):
+        return {}
+    sc = pd.read_csv(path, sep="\t")
+    sc = sc[(sc["scope"] == "population") & (sc["mode"] == "ko") & (sc["status"] == "ok")].dropna(subset=["CAPS"])
+    if sc.empty:
+        return {}
+    rk = sc["CAPS"].rank(ascending=False, method="min")
+    return {t: (float(r), int(len(sc))) for t, r in zip(sc["tf"], rk)}
 
 
 def _consensus(report):
     """One row per ko_id over rows with headline == True (ok status, GAP verdict PASS)."""
     out = []
+    screen_rank = _screen_population_ranks(args.screen_caps_tsv)
     pop = report[report["scope"] == "population"].set_index("ko_id")
     for ko_id, g in report.groupby("ko_id"):
         h = g[g["headline"]]
@@ -91,6 +114,8 @@ def _consensus(report):
             "population_CAPS": float(pr["CAPS"]) if pr is not None else np.nan,
             "population_rank": float(pr["rank_in_scope"]) if pr is not None else np.nan,
             "population_gap_verdict": pr["gap_verdict"] if pr is not None else np.nan,
+            "population_screen_rank": screen_rank.get(h["tfs"].iloc[0], (np.nan, np.nan))[0] if "," not in str(h["tfs"].iloc[0]) else np.nan,
+            "population_screen_n": screen_rank.get(h["tfs"].iloc[0], (np.nan, np.nan))[1] if "," not in str(h["tfs"].iloc[0]) else np.nan,
             "median_rank_pct": float(h["rank_pct"].median()),
             "n_negctl_pass": int((h["negctl_verdict"] == "PASS").sum()),
             "median_gap_minus_negctl_rho": float(h["gap_minus_negctl_rho"].median())

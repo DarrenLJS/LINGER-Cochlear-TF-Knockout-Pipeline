@@ -1619,11 +1619,13 @@ generalization_test_panel:
     age: P8
     path: "{multiome_root}/../10_generalization_test/GSE171921_Pknox2_KO_P8"
     sample_column_regex: "^KO_\\d+$"
+    entrez_symbol_map: "/exports/eddie/scratch/s2906787/cochlear_datasets/gene_annotation/mouse_entrez_symbol.tsv"   # ADDED 2026-10-16: file is keyed by EntrezGeneid
     paired_baseline_entry:
       test_id: GSE171921_Pknox2_WT_P8
       dataset: GSE171921
       path: "{multiome_root}/../10_generalization_test/GSE171921_Pknox2_KO_P8"
       sample_column_regex: "^WT_\\d+$"
+      entrez_symbol_map: "/exports/eddie/scratch/s2906787/cochlear_datasets/gene_annotation/mouse_entrez_symbol.tsv"
     eligibility: eligible   # RESOLVED 2026-10-15 (Track-0): TF is in the 586-TF network / Exp.tsv
     scoring: {ko_id: pknox2_ko, sign: 1}  # KO vs WT (same study)
 
