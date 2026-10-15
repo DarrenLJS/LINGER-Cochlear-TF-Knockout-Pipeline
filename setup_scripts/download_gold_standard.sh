@@ -9,6 +9,17 @@
 #   GenAge model organisms  genomics.senescence.info/genes/models_genes.zip
 #   CellAge                 genomics.senescence.info/cells/cellAge.zip
 #
+# ADDED 2026-10-15 — two MSigDB MOUSE gene-set collections for the pathway-level metrics (Stage 6; read by
+# compute_metrics.py, never used to build the gold table):
+#   Hallmark  mh.all.v2023.2.Mm.symbols.gmt
+#   GO:BP     m5.go.bp.v2023.2.Mm.symbols.gmt
+#   from https://data.broadinstitute.org/gsea-msigdb/msigdb/release/2023.2.Mm/
+# They go into <DATA_ROOT>/gold_standard/msigdb/ with md5 + gene-set counts in the manifest. If the Broad server is
+# not reachable from Eddie the script does NOT abort the three tables above: it prints the two URLs and the exact
+# target path so the files can be downloaded on a laptop and copied over (scp), and exits non-zero at the very end
+# so the missing files are not silently ignored. (A GMT that downloads but is HTML / empty / has < 40 sets stops
+# the script immediately.)
+#
 # These are PROVENANCE files only. The pipeline never downloads anything at run
 # time: a build script reads them once and writes a versioned table into the
 # repository. That is why this script is separate from download_datasets.sh
@@ -86,6 +97,38 @@ find genage_human genage_models cellage -type f \( -iname '*.csv' -o -iname '*.t
     head -n 4 "$t" | cut -c1-400
 done
 
+# ---- MSigDB mouse GMTs (Hallmark, GO:BP) -------------------------------------------------------------
+MSIG_BASE="${MSIG_BASE:-https://data.broadinstitute.org/gsea-msigdb/msigdb/release/2023.2.Mm}"
+MSIG_DIR="${GOLD_DIR}/msigdb"
+mkdir -p "$MSIG_DIR"
+MSIG_MISSING=0
+# name | minimum number of gene sets (Hallmark has 50, GO:BP thousands)
+for spec in "mh.all.v2023.2.Mm.symbols.gmt|40" "m5.go.bp.v2023.2.Mm.symbols.gmt|1000"; do
+    f="${spec%%|*}"; min="${spec#*|}"
+    if [ ! -s "${MSIG_DIR}/${f}" ]; then
+        log "fetching ${MSIG_BASE}/${f}"
+        if wget --tries=3 --timeout=60 --quiet -O "${MSIG_DIR}/${f}.part" "${MSIG_BASE}/${f}" && [ -s "${MSIG_DIR}/${f}.part" ]; then
+            mv -f "${MSIG_DIR}/${f}.part" "${MSIG_DIR}/${f}"
+        else
+            rm -f "${MSIG_DIR}/${f}.part"
+            echo "[$(date '+%F %T')] WARNING: could not download ${f}." >&2
+            echo "    Download it on a machine with internet access:  ${MSIG_BASE}/${f}" >&2
+            echo "    then copy it to Eddie:  scp ${f} <you>@eddie.ecdf.ed.ac.uk:${MSIG_DIR}/${f}" >&2
+            MSIG_MISSING=1
+            continue
+        fi
+    fi
+    n=$(wc -l < "${MSIG_DIR}/${f}")
+    head -c 200 "${MSIG_DIR}/${f}" | grep -qi '<html' && die "${f} is an HTML page, not a GMT"
+    [ "$n" -ge "$min" ] || die "${f} has only ${n} gene sets (expected >= ${min}) — truncated or wrong file"
+    awk -F'\t' 'NF < 3 {bad++} END {exit bad > 0}' "${MSIG_DIR}/${f}" || die "${f}: lines with < 3 tab-separated fields"
+    printf '%s\t%s\t%s\t%s\t%s\n' "msigdb/${f}" "${MSIG_BASE}/${f}" "$(stat -c %s "${MSIG_DIR}/${f}")" "$(md5sum "${MSIG_DIR}/${f}" | cut -d' ' -f1)" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> manifest.tsv
+    log "ok ${f}: ${n} gene sets"
+done
+
 # provenance files: read-only from here on
 chmod -R a-w "$GOLD_DIR"
+if [ "$MSIG_MISSING" -ne 0 ]; then
+    die "MSigDB GMT file(s) missing (see the WARNING lines above) — copy them to ${MSIG_DIR} and re-run this script"
+fi
 log "done: ${GOLD_DIR}"

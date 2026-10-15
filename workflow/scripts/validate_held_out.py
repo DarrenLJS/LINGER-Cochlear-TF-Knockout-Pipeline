@@ -273,6 +273,12 @@ p.add_argument("--null-mode", choices=["ko", "oe"], default="ko", help="which sc
 p.add_argument("--null-exclude-tfs", nargs="*", default=[], help="TFs of THIS check, left out of the null")
 p.add_argument("--null-pctile-max", type=float, default=0.95,
                help="negative control passes if its rho is below this percentile of the null")
+p.add_argument("--output-shifts-tsv", default=None,
+               help="ADDED 2026-10-15: expression_shift only — write the gene-aligned vectors the verdict was computed on "
+                    "(gene, real_shift, predicted_shift, level) so compute_metrics.py can score baselines / pathways on them.")
+p.add_argument("--config-hash", default="",
+               help="ADDED 2026-10-15 (provenance): short hash of the config the run was launched with; "
+                    "written to every score row together with the md5 of the prediction/baseline files read.")
 p.add_argument("--network", default="cell population",
                help="ADDED for Module 9b. Overrides the LingerGRN `network` arg to "
                     "TF_activity.regulon() for mode=='aging_tf_activity' (default: 'cell "
@@ -469,6 +475,17 @@ def _screen_null_rhos(screen_dir, mode, exclude, real_c, sign):
 
 
 extra = {}  # additional output columns for expression_shift rows
+provenance = {"config_hash": args.config_hash}
+
+
+def _md5(path):
+    import hashlib
+    h = hashlib.md5()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()[:12]
+
 
 if spec["mode"] == "expression_shift":
     import anndata as ad_mod
@@ -506,15 +523,28 @@ if spec["mode"] == "expression_shift":
     print(f"real_shift: {len(real_shift)} genes (ln-CP10k units)")
 
     # ---- predicted shift: KO minus the model's OWN baseline, same scale ----
-    ko_id = spec["ko_id"]
-    ko_path = os.path.join(args.module8_dir, f"{ko_id}_predicted_expression.tsv")
-    ko_pred = pd.read_csv(ko_path, sep="\t", index_col=0)
+    # ADDED 2026-10-15 — check_spec["components"]: [{ko_id, sign}, ...] gives an ADDITIVE composite
+    # predicted shift = sum_i sign_i * (KO_i - baseline), used for the combinatorial (GSE86204) arms.
+    # Without "components" the single ko_id / sign behaves exactly as before.
+    comps = spec.get("components") or [{"ko_id": spec["ko_id"], "sign": spec["sign"]}]
+    ko_id = "+".join(f"{c['sign']:+d}{c['ko_id']}" for c in comps) if spec.get("components") else spec["ko_id"]
     base_pred = pd.read_csv(args.sanity_tsv, sep="\t", index_col=0)
-    genes_p = ko_pred.index.intersection(base_pred.index)
-    base_mean = base_pred.loc[genes_p].mean(axis=1)
-    predicted_shift = (ko_pred.loc[genes_p].mean(axis=1) - base_mean) * spec["sign"]
+    provenance["baseline_md5"] = _md5(args.sanity_tsv)
+    predicted_shift, base_mean, pred_md5 = None, None, []
+    for c in comps:
+        ko_path = os.path.join(args.module8_dir, f"{c['ko_id']}_predicted_expression.tsv")
+        ko_pred = pd.read_csv(ko_path, sep="\t", index_col=0)
+        pred_md5.append(f"{c['ko_id']}:{_md5(ko_path)}")
+        genes_p = ko_pred.index.intersection(base_pred.index)
+        if predicted_shift is not None:
+            genes_p = genes_p.intersection(predicted_shift.index)
+        bm = base_pred.loc[genes_p].mean(axis=1)
+        part = (ko_pred.loc[genes_p].mean(axis=1) - bm) * c["sign"]
+        predicted_shift = part if predicted_shift is None else (predicted_shift.loc[genes_p] + part)
+        base_mean = bm
+    provenance["pred_md5"] = ";".join(pred_md5)
     print(f"predicted_shift: {len(predicted_shift)} genes (KO {ko_id} - model baseline {os.path.basename(args.sanity_tsv)}, "
-          f"sign={spec['sign']}); SD={float(predicted_shift.std()):.3g}, max|.|={float(predicted_shift.abs().max()):.3g}")
+          f"sign={spec.get('sign')}); SD={float(predicted_shift.std()):.3g}, max|.|={float(predicted_shift.abs().max()):.3g}")
 
     common = real_shift.index.intersection(predicted_shift.index)
     real_c, pred_c = real_shift.loc[common], predicted_shift.loc[common]
@@ -567,6 +597,10 @@ if spec["mode"] == "expression_shift":
         if scored and spec.get("invert_pass", False):
             verdict = "PASS" if null_pct < args.null_pctile_max else "FAIL"
             verdict_basis = "empirical_null"
+    if args.output_shifts_tsv:
+        pd.DataFrame({"gene": real_c.index, "real_shift": real_c.values, "predicted_shift": pred_c.values,
+                      "level": lvl_c.values}).to_csv(args.output_shifts_tsv, sep="\t", index=False)
+        print(f"wrote aligned shift vectors ({len(real_c)} genes) to {args.output_shifts_tsv}")
     print(f"VERDICT: {verdict} (basis: {verdict_basis})")
     extra = {
         "verdict": verdict, "n_real_target": n_t, "n_real_reference": n_r,
@@ -676,7 +710,7 @@ result = {
     "sample_id": sample_id,
     "check": check,
     "mode": spec["mode"],
-    "ko_id": spec.get("ko_id"),
+    "ko_id": (ko_id if spec["mode"] == "expression_shift" else spec.get("ko_id")),
     "sign": spec.get("sign"),
     "invert_pass": spec.get("invert_pass", False),
     "n_genes_or_tfs": n_common,
@@ -686,6 +720,7 @@ result = {
     "aupr": aupr,
 }
 result.update(extra)
+result.update(provenance)
 result.setdefault("verdict", "not_scored")
 pd.DataFrame([result]).to_csv(args.output_tsv, sep="\t", index=False)
 print(f"Wrote {args.output_tsv}: rho={rho}, auroc={auroc}, aupr={aupr}")

@@ -1,0 +1,9 @@
+# Tier A (cochlear curated, PROXY) -- ONE ROW PER TF. Every row needs a PMID or DOI and an evidence tier, or the build
+# script DROPS it. expected_ko_sign: +1 = knockout expected to move the network toward aging (loss of a maintenance
+# factor); -1 = knockout expected to oppose aging. Hearing-loss / hair-cell-loss phenotypes are a proxy for this, not
+# aging itself.  evidence_tier: e.g. KO_mouse_phenotype | conditional_KO | human_genetics | in_vitro.
+# This file ships EMPTY on purpose: the PMIDs could not be verified when the pipeline was built (PubMed / Europe PMC
+# were not reachable from the build environment), and unsourced rows are not allowed. Fill it in by hand.
+# Candidate genes worth curating (NO direction or citation implied): Atoh1, Pou4f3, Gfi1, Gata3, Sox2, Tbx2, Six1, Eya1,
+# Isl1, Hes1, Hes5, Pax2, Sox10, Lmx1a, Pknox2.
+tf	expected_ko_sign	evidence_tier	pmid	doi

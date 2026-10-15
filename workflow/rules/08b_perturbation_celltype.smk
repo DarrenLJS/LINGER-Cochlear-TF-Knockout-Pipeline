@@ -248,5 +248,5 @@ rule module8b_all:
         expand(
             f"{MODULE8B_DIR}/{{pert_celltype}}/{{ko_id}}_predicted_expression.tsv",
             pert_celltype=CELLTYPE_KO_TYPES,
-            ko_id=list(KNOCKOUTS.keys()),
+            ko_id=CELLTYPE_KO_IDS,
         ),

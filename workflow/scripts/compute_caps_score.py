@@ -86,6 +86,11 @@ p.add_argument("--ieg-genes", nargs="*", default=[],
                help="stress / immediate-early TFs for the IEG-excluded variant")
 p.add_argument("--gap-sample-id", default="GSE224627_GAP_reprogramming",
                help="sample_id of the GAP reprogramming check whose verdict labels the scope")
+p.add_argument("--baseline-expression-tsv", default=None,
+               help="ADDED 2026-10-15: the scope's no-knockout predicted expression (_sanity_check_baseline_predicted.tsv). "
+                    "Used only to explain a no_op: is the KO TF expressed in this scope at all? -> noop_reason column.")
+p.add_argument("--expressed-min", type=float, default=1e-6,
+               help="mean predicted baseline expression at or below this counts as 'not expressed' in the scope")
 p.add_argument("--noop-shift-l2", type=float, default=1e-5)
 p.add_argument("--centrality", choices=["percentile", "raw"], default="percentile")
 p.add_argument("--output-tsv", required=True)
@@ -200,6 +205,25 @@ else:
     caps_popvec = (caps_popvec_proj * regulatory_centrality * confidence_weight
                    if np.isfinite(caps_popvec_proj) else np.nan)
 
+# per-scope "is the KO TF expressed here" check + the reason for a no_op (ADDED 2026-10-15)
+ko_tf_mean_expr, ko_tf_expressed, noop_reason = np.nan, np.nan, ""
+if args.baseline_expression_tsv and os.path.exists(args.baseline_expression_tsv):
+    _be = pd.read_csv(args.baseline_expression_tsv, sep="\t", index_col=0)
+    _means = [float(_be.loc[tf].mean()) for tf in args.tf_list if tf in _be.index]
+    absent = [tf for tf in args.tf_list if tf not in _be.index]
+    if _means:
+        ko_tf_mean_expr = float(np.mean(_means))
+        ko_tf_expressed = bool(max(_means) > args.expressed_min)
+    if status == "no_op":
+        if absent and not _means:
+            noop_reason = "tf_absent_from_expression_matrix"
+        elif not ko_tf_expressed:
+            noop_reason = "tf_not_expressed_in_scope"      # KO of a zero-expression TF changes nothing (e.g. Oct-4-type, Supporting cell / Osteoblast for the hair-cell TFs)
+        else:
+            noop_reason = "tf_expressed_but_activity_shift_below_threshold"
+    print(f"KO TF expression in scope: mean predicted baseline = {ko_tf_mean_expr}; expressed={ko_tf_expressed}"
+          + (f"; no-op reason: {noop_reason}" if noop_reason else ""))
+
 top = ""
 if len(contrib):
     t3 = contrib.reindex(contrib.abs().sort_values(ascending=False).index).head(3)
@@ -221,6 +245,9 @@ result = {
     "CAPS": CAPS,
     "caps_popvec": caps_popvec,
     "status": status,
+    "ko_tf_mean_expr": ko_tf_mean_expr,
+    "ko_tf_expressed": ko_tf_expressed,
+    "noop_reason": noop_reason,
     "top_contributors": top,
     "gap_verdict": gap_verdict,
     "validated_scope": validated_scope,

@@ -203,6 +203,7 @@ combined_cols = [
     "structure_rho", "aging_vec_pop_rho", "aging_vec_scale",
     "null_n", "null_median_rho", "null_p95_rho", "null_pctile", "verdict_basis",
     "verdict", "pass_fail", "gap_minus_negctl_rho",
+    "pred_md5", "baseline_md5", "config_hash",   # provenance (added 2026-10-15): which files / config produced the row
 ]
 combined = pd.concat(
     [population_report.reindex(columns=combined_cols), celltype_report.reindex(columns=combined_cols)],

@@ -1592,7 +1592,8 @@ generalization_test_panel:
       path: "{multiome_root}/../10_generalization_test/GSE173217_Atoh1_OE_P33"
       format: mtx_trio_merge
       glob_pattern: "GSM5261981_cochlear_P33_matrix.mtx.gz"   # single real replicate, n=1
-    eligibility: pending_check_tf_eligibility   # expected ELIGIBLE — Atoh1 already in perturbation.knockouts
+    eligibility: eligible   # RESOLVED 2026-10-15 (Track-0): TF is in the 586-TF network / Exp.tsv
+    scoring: {ko_id: atoh1_oe, sign: 1}   # OE arm vs its paired P33 control; predicted shift = atoh1_oe - model baseline
     notes: >-
       P12-P13 tamoxifen induction, P33 endpoint. Control arm (GSM5261981)
       is n=1 — a real limitation of this dataset, not a loader bug; treat
@@ -1623,7 +1624,8 @@ generalization_test_panel:
       dataset: GSE171921
       path: "{multiome_root}/../10_generalization_test/GSE171921_Pknox2_KO_P8"
       sample_column_regex: "^WT_\\d+$"
-    eligibility: pending_check_tf_eligibility
+    eligibility: eligible   # RESOLVED 2026-10-15 (Track-0): TF is in the 586-TF network / Exp.tsv
+    scoring: {ko_id: pknox2_ko, sign: 1}  # KO vs WT (same study)
 
   # FIXED 2026-09-28 (Bug Class A) — header confirmed via zcat: columns are
   # Geneid, WT1..WT5, cKO1..cKO5 — a clean 5v5 blend in
@@ -1648,7 +1650,8 @@ generalization_test_panel:
       path: "{multiome_root}/../10_generalization_test/GSE300215_Casz1_cKO_P4"
       glob_pattern: "GSE300215_FeatureCounts.txt.gz"
       sample_column_regex: "^WT\\d+$"
-    eligibility: pending_check_tf_eligibility
+    eligibility: not_in_network   # RESOLVED 2026-10-15 (Track-0): gene is absent from the trained network -> DESCRIPTIVE ONLY, never perturbed or scored
+    scoring: null
     notes: >-
       Geneid values in the real header (e.g. 497097, 100503874) look like
       Entrez Gene IDs, not gene symbols — same category of gap already seen
@@ -1679,7 +1682,8 @@ generalization_test_panel:
       dataset: GSE279618
       path: "{multiome_root}/../10_generalization_test/GSE279618_Casz1_KO_P10"
       sample_column_regex: "^P10_WT_OHC-\\d+$"
-    eligibility: pending_check_tf_eligibility
+    eligibility: not_in_network   # RESOLVED 2026-10-15 (Track-0): gene is absent from the trained network -> DESCRIPTIVE ONLY, never perturbed or scored
+    scoring: null
     notes: >-
       Second, independent dataset for the same gene as GSE300215 at a
       different age — score separately, do not average the two together
@@ -1737,7 +1741,8 @@ generalization_test_panel:
       value_column_index: 0
       symbol_column: "Other Gene ID"
       encoding: "utf-16"
-    eligibility: pending_check_tf_eligibility
+    eligibility: not_in_network   # RESOLVED 2026-10-15 (Track-0): gene is absent from the trained network -> DESCRIPTIVE ONLY, never perturbed or scored
+    scoring: null
     notes: >-
       value_column_index/symbol_column confirmed against GSM5862579 only —
       if Stage B's obs_names/shape check comes back odd for any of the
@@ -1782,7 +1787,8 @@ generalization_test_panel:
       glob_pattern: "GSM*_Prdm16_WT_*.txt.gz"
       id_column: Gene
       value_column: Counts
-    eligibility: pending_check_tf_eligibility
+    eligibility: not_in_network   # RESOLVED 2026-10-15 (Track-0): gene is absent from the trained network -> DESCRIPTIVE ONLY, never perturbed or scored
+    scoring: null
     notes: >-
       "Gene" column holds Ensembl IDs (e.g. ENSMUSG00000000001), not gene
       symbols — same category of gap as GSE135703/GSE266157/GSE300215
@@ -1833,7 +1839,8 @@ generalization_test_panel:
       dataset: GSE199369
       path: "{multiome_root}/../10_generalization_test/GSE199369_Tbx2_KO_P14"
       sample_column_regex: "^P14_WT IHC-\\d+$"
-    eligibility: pending_check_tf_eligibility   # expected ELIGIBLE — Tbx2 already in perturbation.knockouts
+    eligibility: eligible   # RESOLVED 2026-10-15 (Track-0): TF is in the 586-TF network / Exp.tsv
+    scoring: {ko_id: tbx2_ko, sign: 1}    # iOHC (Tbx2 KO) vs WT IHC; see notes on the identity-conversion design
     notes: >-
       Tbx2 already has a held_out_inputs check (GSE233559, check:
       tbx2_conversion). This is a SEPARATE, independent dataset — keep
@@ -1898,7 +1905,21 @@ generalization_test_panel:
         sample_column_regex: "^Notch1-KO_\\d+$"
       double_perturbation:
         sample_column_regex: "^b-catenin-OE and Notch1-KO_\\d+$"
-    eligibility: pending_check_tf_eligibility
+    eligibility: effectors_eligible   # RESOLVED 2026-10-15 (Track-0): Notch1 and Ctnnb1 are NOT in the network; their effectors Rbpj, Tcf7, Lef1 ARE
+    scoring_arms:     # arm label -> {arm_regex (columns of that arm), components: [{ko_id, sign}]}; control arm = paired baseline
+      notch1_ko_only:
+        sample_column_regex: "^Notch1-KO_\\d+$"
+        components: [{ko_id: rbpj_ko, sign: 1}]                       # Notch loss ~ loss of its DNA-binding effector Rbpj
+      ctnnb1_activation_only:
+        sample_column_regex: "^b-catenin-OE_\\d+$"
+        components: [{ko_id: tcf7_ko, sign: -1}, {ko_id: lef1_ko, sign: -1}]   # Wnt gain ~ the opposite of Tcf7/Lef1 loss (APPROXIMATE)
+      double_perturbation:
+        sample_column_regex: "^b-catenin-OE and Notch1-KO_\\d+$"
+        components: [{ko_id: rbpj_ko, sign: 1}, {ko_id: tcf7_ko, sign: -1}, {ko_id: lef1_ko, sign: -1}]   # additive composite
+      double_joint_effector_ko:          # same double arm vs ONE joint Rbpj+Tcf7+Lef1 knockout pass (non-additive check; sign +1 as a KO)
+        sample_column_regex: "^b-catenin-OE and Notch1-KO_\\d+$"
+        components: [{ko_id: notch_wnt_effector_ko, sign: 1}]
+    exploratory: true   # effector stand-ins for Notch1/Ctnnb1 are an approximation; read as exploratory
     notes: >-
       PENDING, not confirmed in scope. Notch1/Ctnnb1 are signaling proteins,
       not DNA-binding TFs themselves — check_tf_eligibility.py checks both
@@ -2347,6 +2368,19 @@ resources:
     vmem_mb: 8000
     runtime_min: 30
 
+  # ADDED 2026-10-15 (Stage 5): numpy emulation of regulon() for ~1172 variants of one scope (dense genes x TFs
+  # matrix ~100 MB plus a genes x variants shift matrix); a FIRST GUESS — read qacct after the first run and tighten.
+  screen_caps:
+    slots: 1
+    vmem_mb: 12000
+    runtime_min: 30
+
+  # ADDED 2026-10-15 (Stage 6): metrics + bootstrap CIs over the screen CAPS / baselines (light CPU, modest memory).
+  compute_metrics:
+    slots: 1
+    vmem_mb: 16000
+    runtime_min: 90
+
   # --- Module 10 ---
   benchmark_grn_edges:
     slots: 1
@@ -2401,6 +2435,13 @@ perturbation:
     pou4f3_oe: {tfs: ["Pou4f3"], mode: oe}
     triple_oe: {tfs: ["Atoh1", "Gfi1", "Pou4f3"], mode: oe}
     tbx2_oe: {tfs: ["Tbx2"], mode: oe}
+    # ADDED 2026-10-15 — generalisation-panel effectors for GSE86204 (Notch1/Ctnnb1 are not in the
+    # network; their DNA-binding effectors are). population_only: run at population scope only,
+    # scored by Module 9c, NOT run per cell type and given NO CAPS rows (keeps existing CAPS ranks).
+    rbpj_ko: {tfs: ["Rbpj"], mode: ko, population_only: true}
+    tcf7_ko: {tfs: ["Tcf7"], mode: ko, population_only: true}
+    lef1_ko: {tfs: ["Lef1"], mode: ko, population_only: true}
+    notch_wnt_effector_ko: {tfs: ["Rbpj", "Tcf7", "Lef1"], mode: ko, population_only: true}
   # Module 8b (08b_perturbation_celltype.smk), added 2026-09-16.
   # enabled_celltypes: "all" runs every cell type from cluster_annotation.tsv
   # that clears min_cells_for_pseudobulk; set to an explicit list (e.g.
@@ -2446,7 +2487,10 @@ validation:
 #   n_chunks : TFs are split strided into this many jobs (586/20 ~ 29 TFs each).
 # ---------------------------------------------------------------------------
 tf_screen:
-  scopes: ["population"]
+  # EXTENDED 2026-10-15 (Stage 5): population + the five headline scopes (GAP verdict PASS), so screen-derived CAPS and
+  # the empirical negative-control null (validation.null_from_screen) exist where the verdicts are read. Each added
+  # scope is 20 chunk jobs (~120 in total for the 6 scopes with modes ko+oe). Other cell types stay out on purpose.
+  scopes: ["population", "Greater epithelial ridge", "Interdental cell", "Non-sensory epithelium", "Pillar cell", "Supporting cell"]
   modes: ["ko", "oe"]
   n_chunks: 20
 
@@ -2460,3 +2504,18 @@ caps:
   # (about 3.5x their share of the TF list), and Fos/Fosb/Jund were in the top
   # contributors of 33/25/21 of 58 `ok` rows.
   ieg_genes: [Fos, Fosb, Jun, Junb, Jund, Egr1, Egr2, Egr3, Atf3, Npas4, Nr4a1, Nr4a2, Klf2, Klf4, Ier2, Maff, Mafk, Id1, Id3]
+
+# ADDED 2026-10-15 (Stage 6): Module 12 metrics. gold_tsv is built once by setup_scripts/build_directional_gold.py
+# (Tier A is empty until you supply PMIDs). msigdb_dir is filled by setup_scripts/download_gold_standard.sh.
+# I/R/D indices and a ridge baseline are NOT implemented (definitions not available) - hook left on purpose.
+metrics:
+  gold_tsv: "resources/directional_gold.tsv"
+  msigdb_dir: "/exports/eddie/scratch/s2906787/cochlear_datasets/gold_standard/msigdb"
+  hallmark_gmt: "mh.all.v2023.2.Mm.symbols.gmt"
+  gobp_gmt: "m5.go.bp.v2023.2.Mm.symbols.gmt"
+  n_boot: 300
+  n_perm: 200
+  n_null: 1000
+  gsea_perm: 500
+  gsea_perm_large: 100
+  min_tier_tfs: 10

@@ -57,6 +57,7 @@
 # their own (every other check) are unaffected — the flag is simply empty.
 # =============================================================================
 
+import hashlib
 import json
 import re
 
@@ -80,13 +81,19 @@ CHECK_SPECS = {
     "negative_control_must_not_reprogram": {"mode": "expression_shift", "ko_id": "triple_oe", "sign": 1, "invert_pass": True, "top_k": 200},
 }
 
+# Provenance (ADDED 2026-10-15): short hash of the full config, written into every validation row
+# together with the md5 of the prediction/baseline files that were read. If two runs of the same
+# code give different rhos, differing hashes here say which input changed.
+CONFIG_HASH = hashlib.md5(json.dumps(config, sort_keys=True, default=str).encode()).hexdigest()[:10]
+
 # Verdict parameters (config validation.*), forwarded to validate_held_out.py.
 _VCFG = config.get("validation", {})
 VALIDATION_FLAGS = (
     f"--bootstrap-n {_VCFG.get('bootstrap_n', 1000)} "
     f"--bootstrap-seed {_VCFG.get('bootstrap_seed', 0)} "
     f"--min-excess {_VCFG.get('min_excess_over_level_null', 0.05)} "
-    f"--noop-pred-sd {_VCFG.get('noop_pred_shift_sd', 1e-6)}"
+    f"--noop-pred-sd {_VCFG.get('noop_pred_shift_sd', 1e-6)} "
+    f"--config-hash {CONFIG_HASH}"
 )
 
 # ADDED 2026-10-01 — empirical null from the Module 8c all-TF screen (config
@@ -180,6 +187,7 @@ rule validate_one:
         unpack(_validation_inputs),
     output:
         score = f"{MODULE9_DIR}/{{sample_id}}_score.tsv",
+        shifts = f"{MODULE9_DIR}/{{sample_id}}_shifts.tsv.gz",
     params:
         workdir  = f"{SCRATCH}/module4_linger_init",
         grn_dir  = LINGER_CFG["grn_dir"],
@@ -226,6 +234,7 @@ rule validate_one:
             {VALIDATION_FLAGS} \
             {params.null_args} \
             --output-tsv {output.score} \
+            --output-shifts-tsv {output.shifts} \
             "${{SANITY_ARGS[@]}}" \
             "${{BASELINE_ENTRY_ARGS[@]}}"
         """

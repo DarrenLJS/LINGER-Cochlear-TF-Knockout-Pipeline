@@ -43,6 +43,10 @@ p.add_argument("--module11-dir", required=True, help="MODULE11_DIR — holds {sc
 p.add_argument("--output-tsv", required=True)
 p.add_argument("--output-consensus-tsv", required=True,
                help="per-ko_id consensus over the headline (GAP-validated) scopes")
+p.add_argument("--validation-report-combined", default=None,
+               help="validation_report_combined.tsv; supplies the per-scope negative-control verdict / rho")
+p.add_argument("--gap-sample-id", default="GSE224627_GAP_reprogramming")
+p.add_argument("--negctl-check", default="negative_control_must_not_reprogram")
 args = p.parse_args()
 
 rows = []
@@ -54,11 +58,14 @@ COLS = ["scope", "ko_id", "tfs", "rank_in_scope", "status", "CAPS", "sign_adjust
         "confidence_weight", "sanity_rho", "sanity_pass", "caps_popvec",
         "caps_popvec_rank_in_scope", "n_common_aging_tfs", "top_contributors",
         "gap_verdict", "validated_scope", "sign_adjusted_shift_noieg", "CAPS_noieg",
-        "rank_in_scope_noieg", "ieg_share_aging", "n_ieg_in_top3", "headline"]
+        "rank_in_scope_noieg", "ieg_share_aging", "n_ieg_in_top3", "headline",
+        "rank_pct", "negctl_verdict", "gap_minus_negctl_rho",
+        "ko_tf_mean_expr", "ko_tf_expressed", "noop_reason"]
 
 CONSENSUS_COLS = ["ko_id", "tfs", "n_headline_scopes", "headline_scopes", "median_rank", "median_CAPS",
                   "median_CAPS_noieg", "majority_sign", "sign_agreement", "n_ok_scopes",
-                  "population_CAPS", "population_rank", "population_gap_verdict"]
+                  "population_CAPS", "population_rank", "population_gap_verdict", "median_rank_pct",
+                  "n_negctl_pass", "median_gap_minus_negctl_rho"]
 
 
 def _consensus(report):
@@ -84,6 +91,10 @@ def _consensus(report):
             "population_CAPS": float(pr["CAPS"]) if pr is not None else np.nan,
             "population_rank": float(pr["rank_in_scope"]) if pr is not None else np.nan,
             "population_gap_verdict": pr["gap_verdict"] if pr is not None else np.nan,
+            "median_rank_pct": float(h["rank_pct"].median()),
+            "n_negctl_pass": int((h["negctl_verdict"] == "PASS").sum()),
+            "median_gap_minus_negctl_rho": float(h["gap_minus_negctl_rho"].median())
+                                           if h["gap_minus_negctl_rho"].notna().any() else np.nan,
         })
     res = pd.DataFrame(out, columns=CONSENSUS_COLS)
     return res.sort_values(["median_rank", "ko_id"]).reset_index(drop=True)
@@ -106,6 +117,31 @@ if rows:
         report.loc[okn.index, "rank_in_scope_noieg"] = okn["CAPS_noieg"].rank(ascending=False, method="min")
         okp = ok[ok["caps_popvec"].notna()]
         report.loc[okp.index, "caps_popvec_rank_in_scope"] = okp["caps_popvec"].rank(ascending=False, method="min")
+    # rank percentile within scope (1 = best, 0 = worst); comparable across scopes of different size
+    report["rank_pct"] = np.nan
+    for scope, idx in report.groupby("scope").groups.items():
+        r = report.loc[idx, "rank_in_scope"]
+        n = int(r.notna().sum())
+        if n > 1:
+            report.loc[idx, "rank_pct"] = 1.0 - (r - 1.0) / (n - 1.0)
+        elif n == 1:
+            report.loc[idx, "rank_pct"] = 1.0
+    # negative-control verdict and GAP-minus-negctl rho per scope (label only; never gates the headline)
+    report["negctl_verdict"] = pd.Series([None] * len(report), index=report.index, dtype=object)
+    report["gap_minus_negctl_rho"] = np.nan
+    if args.validation_report_combined and os.path.exists(args.validation_report_combined):
+        vr = pd.read_csv(args.validation_report_combined, sep="\t")
+        vcol = "pass_fail" if "pass_fail" in vr.columns else "verdict"
+        for scope in report["scope"].unique():
+            sv = vr[vr["scope"] == scope]
+            nc = sv[sv["check"] == args.negctl_check] if "check" in sv.columns else sv.iloc[0:0]
+            m = report["scope"] == scope
+            if len(nc):
+                report.loc[m, "negctl_verdict"] = str(nc[vcol].iloc[0])
+            if "gap_minus_negctl_rho" in sv.columns and sv["gap_minus_negctl_rho"].notna().any():
+                report.loc[m, "gap_minus_negctl_rho"] = float(sv["gap_minus_negctl_rho"].dropna().iloc[0])
+    else:
+        print("NOTE: no --validation-report-combined; negctl_verdict / gap_minus_negctl_rho left NaN")
     report["headline"] = (report["status"] == "ok") & (report["gap_verdict"] == "PASS")
     report["_pop"] = (report["scope"] != "population").astype(int)
     report = (report.sort_values(["_pop", "scope", "rank_in_scope", "ko_id"], na_position="last")

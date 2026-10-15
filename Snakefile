@@ -162,8 +162,10 @@ include: "workflow/rules/08b_perturbation_celltype.smk"
 include: "workflow/rules/08c_tf_screen.smk"
 include: "workflow/rules/09_validation.smk"
 include: "workflow/rules/09b_validation_celltype.smk"
+include: "workflow/rules/09c_generalization_panel.smk"
 include: "workflow/rules/10_grn_benchmarking.smk"
 include: "workflow/rules/11_caps_score.smk"
+include: "workflow/rules/12_metrics.smk"
 # 05_chromatin_priors.smk not built — Module 5 decided as Option A, folded
 # into Module 10's benchmarking (see README "Design notes"), not a
 # separate pipeline stage.

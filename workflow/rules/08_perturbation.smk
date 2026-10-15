@@ -54,17 +54,18 @@ def _normalise_ko_spec(ko_id, spec):
     if isinstance(spec, list):
         spec = {"tfs": spec, "mode": "ko"}
     elif isinstance(spec, dict):
-        extra = set(spec) - {"tfs", "mode"}
+        extra = set(spec) - {"tfs", "mode", "population_only"}
         if extra:
             raise ValueError(f"perturbation.knockouts[{ko_id!r}]: unknown key(s) {sorted(extra)}")
-        spec = {"tfs": spec.get("tfs"), "mode": spec.get("mode", "ko")}
+        spec = {"tfs": spec.get("tfs"), "mode": spec.get("mode", "ko"),
+                "population_only": bool(spec.get("population_only", False))}
     else:
         raise ValueError(f"perturbation.knockouts[{ko_id!r}] must be a list or a dict, got {type(spec).__name__}")
     if not spec["tfs"] or not all(isinstance(t, str) for t in spec["tfs"]):
         raise ValueError(f"perturbation.knockouts[{ko_id!r}]: 'tfs' must be a non-empty list of TF names")
     if spec["mode"] not in ("ko", "oe"):
         raise ValueError(f"perturbation.knockouts[{ko_id!r}]: mode must be 'ko' or 'oe', got {spec['mode']!r}")
-    return {"tfs": list(spec["tfs"]), "mode": spec["mode"]}
+    return {"tfs": list(spec["tfs"]), "mode": spec["mode"], "population_only": spec.get("population_only", False)}
 
 
 _KO_SPECS = {k: _normalise_ko_spec(k, v) for k, v in config["perturbation"]["knockouts"].items()}
@@ -81,6 +82,11 @@ if LEGACY_FORWARD:
     _KO_SPECS = {k: v for k, v in _KO_SPECS.items() if v["mode"] == "ko"}
 KNOCKOUTS = {k: v["tfs"] for k, v in _KO_SPECS.items()}      # ko_id -> [TF, ...]
 KO_MODE_OF = {k: v["mode"] for k, v in _KO_SPECS.items()}    # ko_id -> "ko" | "oe"
+# ADDED 2026-10-15 — population_only: true marks the generalisation-panel perturbations (Rbpj/Tcf7/Lef1
+# effector KOs). They are run and scored at population scope only (Module 9c); they are NOT run per
+# cell type (Module 8b) and get NO CAPS rows, so the existing CAPS within-scope ranks are unchanged.
+POPULATION_ONLY_KO_IDS = [k for k, v in _KO_SPECS.items() if v.get("population_only")]
+CELLTYPE_KO_IDS = [k for k in KNOCKOUTS if k not in POPULATION_ONLY_KO_IDS]
 OE_QUANTILE = config["perturbation"].get("oe_quantile", 0.99)
 
 # REVISED 2026-10-01 — forward-pass semantics (see linger_perturbation.py's

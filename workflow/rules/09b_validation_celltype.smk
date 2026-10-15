@@ -132,6 +132,7 @@ rule validate_celltype_one:
         unpack(_ct_validation_inputs),
     output:
         score = f"{MODULE9B_DIR}/{{pert_celltype}}/{{sample_id}}_score.tsv",
+        shifts = f"{MODULE9B_DIR}/{{pert_celltype}}/{{sample_id}}_shifts.tsv.gz",
     params:
         workdir  = f"{SCRATCH}/module4_linger_init",
         grn_dir  = LINGER_CFG["grn_dir"],
@@ -174,6 +175,7 @@ rule validate_celltype_one:
             {VALIDATION_FLAGS} \
             {params.null_args} \
             --output-tsv "{output.score}" \
+            --output-shifts-tsv "{output.shifts}" \
             "${{BASELINE_ENTRY_ARGS[@]}}"
         """
 

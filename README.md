@@ -74,15 +74,15 @@ benchmarking ground truth in Module 10 (see [Design notes](#design-notes)).
 | 0 | *(manual)* | conda, HOMER, `setup_linger.sh` | Conda envs, mm10 references, LINGER reference data, HOMER + mm10 genome package | ✅ Done |
 | 1 | `01_qc_preprocessing.smk` | Scanpy, Scrublet | Per-sample RNA+ATAC load, QC filtering, doublet detection, mito/haemoglobin gene removal | ✅ Done |
 | 2 | `02_consensus_peaks.smk` | bedtools, SnapATAC2 | Consensus peak set, re-quantification, RNA/ATAC barcode sync, sanity checks | ✅ Done |
-| 3 | `03_integration_celltyping.smk` | Harmony, Leiden, UMAP | Batch integration, clustering, marker scoring, **manual** cell-type labelling (22 cell types) | ✅ Done |
+| 3 | `03_integration_celltyping.smk` | Harmony, Leiden, UMAP | Batch integration, clustering, marker scoring, **manual** cell-type labelling (count: see `module11_caps/celltype_funnel_summary.tsv`) | ✅ Done |
 | 4 | `04_linger_init.smk` | LINGER (`scNN`), HOMER | Pseudobulking, TSS redistribution, motif scanning (`MotifTarget.bed`) | ✅ Done |
-| 6 | `06_grn_inference.smk` | LingerGRN (`LL_net`, `LINGER_tr`) | Population training + per-cell-type cis/trans regulatory networks (22 cell types) | ✅ Done |
+| 6 | `06_grn_inference.smk` | LingerGRN (`LL_net`, `LINGER_tr`) | Population training + per-cell-type cis/trans regulatory networks (count: see the funnel summary) | ✅ Done |
 | 7 | `07_bulk_tf_activity.smk` | LingerGRN (`TF_activity`) | Expression-only TF activity across 41 datasets (37 bulk + 4 baseline) | ✅ Done — 586 TFs |
-| 8 | `08_perturbation.smk` | Direct `{chr}_net.pt` forward pass | Atoh1, Gfi1, Pou4f3 (single + triple) and Tbx2 knockouts, population pseudobulk | ✅ Done — sanity check median ρ = 0.790 |
-| 8b | `08b_perturbation_celltype.smk` | Same forward pass | Same 5 knockouts per cell type (20 cell types with ≥ 100 cells) | ✅ Done — per-cell-type sanity ρ 0.08–0.38 |
+| 8 | `08_perturbation.smk` | Direct `{chr}_net.pt` forward pass | Atoh1, Gfi1, Pou4f3 (single + triple) and Tbx2 knockouts, population pseudobulk | ✅ Done — sanity check median ρ: see `logs/08_sanity_check.log` (a gate of 0.5 is applied via `perturbation.sanity_gate`) |
+| 8b | `08b_perturbation_celltype.smk` | Same forward pass | Same 5 knockouts per cell type (cell types with ≥ min cells; count in the funnel summary) | ✅ Done — per-cell-type sanity ρ in `sanity_check` outputs |
 | 9 | `09_validation.smk` | SciPy, scikit-learn | Spearman ρ + AUROC/AUPR vs held-out data, plus a negative control | ✅ Done — 1 of 3 scored checks passes |
 | 9b | `09b_validation_celltype.smk` | Same checks, per cell type | Population and cell-type results under one schema (`scope` column) | ✅ Done — see caveats |
-| 10 | `10_grn_benchmarking.smk` | bedtools, scikit-learn | AUROC/AUPR of inferred edges vs Hi-C / CUT&RUN | ✅ Done — 22 cell types |
+| 10 | `10_grn_benchmarking.smk` | bedtools, scikit-learn | AUROC/AUPR of inferred edges vs Hi-C / CUT&RUN | ✅ Done (cell-type count: funnel summary) |
 | 11 | `11_caps_score.smk` | pandas, LingerGRN (`TF_activity`) | CAPS ranking per knockout and scope | ✅ Done — 105 (knockout, scope) rows |
 
 All twelve rule files are included in the `Snakefile`. Modules 6–11 are
@@ -595,3 +595,16 @@ Darren Lim Jia Sheng (DarrenLJS)
 TODO
 Released under the MIT License — free to use, modify, and redistribute
 with attribution.
+
+
+---
+
+## Update 2026-10-15 (Stages 1-7)
+
+New modules: **9c** generalisation panel (`09c_generalization_panel.smk`, independent perturbation datasets, population scope),
+**11b** screen CAPS for all 586 TFs in 6 scopes (`screen_caps.py`, numpy emulation of `regulon()`, with a consistency table against Module 11),
+**12** metrics (`12_metrics.smk`: expression PCC / relative RMSE / DEG concordance with four baselines, pathway NES agreement,
+directional-gold ranking with matched-random nulls and bootstrap CIs). Gold table: `setup_scripts/build_directional_gold.py`
+(Tier A cochlear curated is EMPTY until PMIDs are supplied in `resources/cochlear_curated_gold.tsv`).
+Not implemented because the definitions were not available: I/R/D indices and a ridge baseline. See `CHANGES.md` and `RUN_GUIDE.md`.
+The figure counts and correlation numbers quoted in older sections of this README are stale; the tables written by the pipeline are authoritative.

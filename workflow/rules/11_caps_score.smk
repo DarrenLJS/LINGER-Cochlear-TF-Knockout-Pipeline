@@ -42,7 +42,7 @@ MODULE11_DIR = f"{SCRATCH}/module11_caps"
 # the generalisation panel / TF screen) would otherwise enter the table.
 _CAPS_CFG0 = config.get("caps", {})
 CAPS_INCLUDE_MODES = _CAPS_CFG0.get("include_modes", ["ko"])
-CAPS_KO_IDS = [k for k in KNOCKOUTS.keys() if KO_MODE_OF[k] in CAPS_INCLUDE_MODES]
+CAPS_KO_IDS = [k for k in CELLTYPE_KO_IDS if KO_MODE_OF[k] in CAPS_INCLUDE_MODES]
 
 # REVISED 2026-10-01 — see compute_caps_score.py / aggregate_caps_scores.py.
 _CAPS_CFG = config.get("caps", {})
@@ -132,6 +132,7 @@ rule caps_score_population:
         aging_shift = f"{MODULE9_DIR}/{AGING_VECTOR_SAMPLE_ID}_aging_shift.tsv",
         trans_regulatory = f"{SCRATCH}/module4_linger_init/cell_population_trans_regulatory.txt",
         validation_report_combined = f"{MODULE9B_DIR}/validation_report_combined.tsv",
+        baseline_expression = f"{MODULE8_DIR}/_sanity_check_baseline_predicted.tsv",
     output:
         f"{MODULE11_DIR}/population/{{caps_ko_id}}_caps.tsv",
     params:
@@ -155,6 +156,7 @@ rule caps_score_population:
             --ko-tf-activity-tsv "{input.ko_tf_activity}" \
             --aging-shift-tsv "{input.aging_shift}" \
             --population-aging-shift-tsv "{input.aging_shift}" \
+            --baseline-expression-tsv "{input.baseline_expression}" \
             --trans-regulatory-tsv "{input.trans_regulatory}" \
             --validation-report-combined "{input.validation_report_combined}" \
             {CAPS_FLAGS} \
@@ -238,6 +240,7 @@ rule caps_score_celltype:
         population_aging_shift = f"{MODULE9_DIR}/{AGING_VECTOR_SAMPLE_ID}_aging_shift.tsv",
         trans_regulatory = f"{SCRATCH}/module4_linger_init/cell_type_specific_trans_regulatory_{{caps_celltype}}.txt",
         validation_report_combined = f"{MODULE9B_DIR}/validation_report_combined.tsv",
+        baseline_expression = f"{MODULE8B_DIR}/{{caps_celltype}}/_sanity_check_baseline_predicted.tsv",
     output:
         f"{MODULE11_DIR}/{{caps_celltype}}/{{caps_ko_id}}_caps.tsv",
     params:
@@ -261,6 +264,7 @@ rule caps_score_celltype:
             --ko-tf-activity-tsv "{input.ko_tf_activity}" \
             --aging-shift-tsv "{input.aging_shift}" \
             --population-aging-shift-tsv "{input.population_aging_shift}" \
+            --baseline-expression-tsv "{input.baseline_expression}" \
             --trans-regulatory-tsv "{input.trans_regulatory}" \
             --validation-report-combined "{input.validation_report_combined}" \
             {CAPS_FLAGS} \
@@ -280,6 +284,7 @@ def _module11_caps_targets():
 rule module11_aggregate:
     input:
         caps_scores = _module11_caps_targets(),
+        validation_report_combined = f"{MODULE9B_DIR}/validation_report_combined.tsv",
     output:
         caps = f"{MODULE11_DIR}/caps_scores.tsv",
         consensus = f"{MODULE11_DIR}/caps_headline_consensus.tsv",
@@ -298,6 +303,8 @@ rule module11_aggregate:
         export LD_LIBRARY_PATH="{LINGER_ENV_LIB}:$LD_LIBRARY_PATH"
         {LINGER_PYTHON} workflow/scripts/aggregate_caps_scores.py \
             --module11-dir "{params.module11_dir}" \
+            --validation-report-combined "{input.validation_report_combined}" \
+            --gap-sample-id "{CAPS_GAP_SAMPLE_ID}" \
             --output-tsv "{output.caps}" \
             --output-consensus-tsv "{output.consensus}"
         """
@@ -307,3 +314,136 @@ rule module11_all:
     input:
         f"{MODULE11_DIR}/caps_scores.tsv",
         f"{MODULE11_DIR}/caps_headline_consensus.tsv",
+        f"{MODULE11_DIR}/celltype_funnel_summary.tsv",
+
+
+# ── cell-type funnel (ADDED 2026-10-15) ──────────────────────────────────────
+# annotated clusters -> labels -> networks -> benchmarked -> perturbed -> KO-evaluated. Reads only files the
+# pipeline already wrote; run after module11_all so the last column is populated.
+rule celltype_funnel:
+    input:
+        annotation = INTEGRATION_CFG["cluster_annotation_tsv"],
+        caps = f"{MODULE11_DIR}/caps_scores.tsv",
+    output:
+        table = f"{MODULE11_DIR}/celltype_funnel.tsv",
+        summary = f"{MODULE11_DIR}/celltype_funnel_summary.tsv",
+    params:
+        module4_dir = f"{SCRATCH}/module4_linger_init",
+        benchmark = f"{SCRATCH}/module10_benchmarking/benchmark_report.tsv",
+        module8b_dir = f"{SCRATCH}/module8_perturbation/celltype",
+    log:
+        f"{SCRATCH}/logs/11d_celltype_funnel.log",
+    resources:
+        runtime   = config["resources"]["module11_aggregate"]["runtime_min"],
+        sge_extra = sge_extra("module11_aggregate"),
+    shell:
+        r"""
+        set -euo pipefail
+        exec &> "{log}"
+        export PATH="{LINGER_ENV_BIN}:$PATH"
+        {LINGER_PYTHON} workflow/scripts/celltype_funnel.py \
+            --annotation "{input.annotation}" --module4-dir "{params.module4_dir}" \
+            --benchmark-tsv "{params.benchmark}" --module8b-dir "{params.module8b_dir}" \
+            --caps-tsv "{input.caps}" \
+            --output-tsv "{output.table}" --output-summary-tsv "{output.summary}"
+        """
+
+
+# ── screen -> CAPS (Stage 5, ADDED 2026-10-15) ────────────────────────────────────────────────────────────────────────────
+# Projects the Module 8c all-TF screen (586 single-TF knockouts per screened scope) onto CAPS with a numpy emulation
+# of regulon(); see screen_caps.py for the maths and the consistency check against Module 11's own rows.
+# tf_screen.scopes in the config decides which scopes are screened (and therefore get screen CAPS).
+SCREEN_CAPS_MODES = [m for m in SCREEN_MODES if m in CAPS_INCLUDE_MODES]
+_SINGLE_TF_KO = {KNOCKOUTS[k][0]: k for k in CAPS_KO_IDS if len(KNOCKOUTS[k]) == 1 and KO_MODE_OF[k] == "ko"}
+
+
+def _screen_caps_inputs(wc):
+    sc = wc.screen_scope
+    d = {
+        "status": f"{MODULE8C_DIR}/{sc}/screen_status.tsv",
+        "shifts": expand(f"{MODULE8C_DIR}/{sc}/chunk_{{chunk}}_shift.tsv.gz", chunk=SCREEN_CHUNKS),
+        "trans_regulatory": _screen_trans_reg(wc),
+        "validation_report_combined": f"{MODULE9B_DIR}/validation_report_combined.tsv",
+    }
+    if sc == "population":
+        d["aging_shift"] = f"{MODULE9_DIR}/{AGING_VECTOR_SAMPLE_ID}_aging_shift.tsv"
+    else:
+        d["aging_shift"] = f"{MODULE9B_DIR}/{sc}/{AGING_VECTOR_SAMPLE_ID}_aging_shift.tsv"
+    if sc == "population" or sc in CELLTYPE_AGING_TYPES:
+        d["reference_caps"] = [f"{MODULE11_DIR}/{sc}/{k}_caps.tsv" for k in _SINGLE_TF_KO.values()]
+    return d
+
+
+rule screen_caps_scope:
+    wildcard_constraints:
+        screen_scope = "|".join(re.escape(s) for s in SCREEN_SCOPES) if SCREEN_SCOPES else "(?!)",
+    input:
+        unpack(_screen_caps_inputs),
+    output:
+        caps = f"{MODULE11_DIR}/screen/{{screen_scope}}_screen_caps.tsv",
+        consistency = f"{MODULE11_DIR}/screen/{{screen_scope}}_screen_caps_consistency.tsv",
+    params:
+        screen_dir = lambda wc: f"{MODULE8C_DIR}/{wc.screen_scope}",
+        module11_scope_dir = lambda wc: f"{MODULE11_DIR}/{wc.screen_scope}",
+        ko_map = json.dumps(_SINGLE_TF_KO),
+        modes = " ".join(SCREEN_CAPS_MODES),
+    log:
+        f"{SCRATCH}/logs/11e_screen_caps_{{screen_scope}}.log",
+    resources:
+        runtime   = config["resources"]["screen_caps"]["runtime_min"],
+        sge_extra = sge_extra("screen_caps"),
+    shell:
+        r"""
+        set -euo pipefail
+        exec &> "{log}"
+        export PATH="{LINGER_ENV_BIN}:$PATH"
+        export LD_LIBRARY_PATH="{LINGER_ENV_LIB}:$LD_LIBRARY_PATH"
+        {LINGER_PYTHON} workflow/scripts/screen_caps.py \
+            --scope "{wildcards.screen_scope}" \
+            --screen-dir "{params.screen_dir}" \
+            --trans-regulatory-tsv "{input.trans_regulatory}" \
+            --aging-shift-tsv "{input.aging_shift}" \
+            --validation-report-combined "{input.validation_report_combined}" \
+            --modes {params.modes} \
+            --noop-shift-l2 {CAPS_NOOP_L2} --centrality {CAPS_CENTRALITY} \
+            --gap-sample-id {CAPS_GAP_SAMPLE_ID} --ieg-genes {CAPS_IEG} \
+            --ko-map-json {params.ko_map:q} \
+            --module11-scope-dir "{params.module11_scope_dir}" \
+            --output-tsv "{output.caps}" --output-consistency-tsv "{output.consistency}"
+        """
+
+
+rule screen_caps_aggregate:
+    input:
+        caps = expand(f"{MODULE11_DIR}/screen/{{screen_scope}}_screen_caps.tsv", screen_scope=SCREEN_SCOPES),
+        consistency = expand(f"{MODULE11_DIR}/screen/{{screen_scope}}_screen_caps_consistency.tsv", screen_scope=SCREEN_SCOPES),
+    output:
+        caps = f"{MODULE11_DIR}/screen_caps_all.tsv",
+        consistency = f"{MODULE11_DIR}/screen_caps_consistency.tsv",
+    log:
+        f"{SCRATCH}/logs/11f_screen_caps_aggregate.log",
+    resources:
+        runtime   = config["resources"]["module11_aggregate"]["runtime_min"],
+        sge_extra = sge_extra("module11_aggregate"),
+    shell:
+        r"""
+        set -euo pipefail
+        exec &> "{log}"
+        export PATH="{LINGER_ENV_BIN}:$PATH"
+        {LINGER_PYTHON} - <<'PY'
+import glob, pandas as pd
+for pat, out in (("{MODULE11_DIR}/screen/*_screen_caps.tsv", "{output.caps}"),
+                 ("{MODULE11_DIR}/screen/*_screen_caps_consistency.tsv", "{output.consistency}")):
+    fs = sorted(glob.glob(pat))
+    if pat.endswith("_screen_caps.tsv"):
+        fs = [f for f in fs if not f.endswith("_consistency.tsv")]
+    d = pd.concat([pd.read_csv(f, sep="\t") for f in fs], ignore_index=True)
+    d.to_csv(out, sep="\t", index=False)
+    print(out, len(d), "rows from", len(fs), "scopes")
+PY
+        """
+
+
+rule module11b_screen_caps_all:
+    input:
+        f"{MODULE11_DIR}/screen_caps_all.tsv",
