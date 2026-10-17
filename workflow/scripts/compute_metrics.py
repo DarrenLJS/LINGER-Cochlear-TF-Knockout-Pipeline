@@ -16,8 +16,16 @@ OUTPUTS (--out-dir)
   metrics_pathway.tsv      one row per (scope, contrast, gene-set collection): NES Spearman and strong-set sign agreement
   metrics_ranking.tsv      one row per (scope, tier, direction, subset): sign accuracy, AP / nDCG@K / Recall@K with
                            matched-random nulls, bootstrap CIs, leave-source-out rows
-  metrics_notes.txt        what was skipped and why (I/R/D and a ridge baseline are NOT implemented: their definitions
-                           were not available — see metrics_lib.py)
+  metrics_recall_curve.tsv cumulative Recall@K (K = 1..200) per (scope, tier, direction, subset) with the matched-random null band
+                           and a 95% bootstrap CI (ADDED 2026-10-17, supervisor Fig 4A)
+  metrics_epsilon.tsv      GSE86204 interaction residual eps = delta_double - (delta_notch + delta_ctnnb1), real vs predicted
+                           (ADDED 2026-10-17; EXPLORATORY, see the note written into the file's `note` column)
+  metrics_notes.txt        what was skipped and why (a ridge baseline is NOT implemented: no training set exists for a
+                           single-model pipeline; I/R/D now live in compute_ird.py — see metrics_lib.py)
+
+CHANGED 2026-10-17: metrics_expression.tsv gained `pcc_centroid` (Systema-style centroid-subtracted PCC-delta, with CI) and the
+columns `source_set` (xlsx_unit | supporting_held_out | negative_control), `perturb_class` (OE | KD), `dimensions` and `gene`
+for panel (xlsx) contrasts, so results can be organised by the supervisor's 7 test dimensions with OE and KD kept apart.
 """
 import argparse
 import glob
@@ -48,10 +56,15 @@ p.add_argument("--gsea-perm-large", type=int, default=100, help="permutations fo
 p.add_argument("--ks", nargs="*", type=int, default=[10, 20, 50])
 p.add_argument("--min-tier-tfs", type=int, default=10)
 p.add_argument("--seed", type=int, default=0)
+p.add_argument("--negative-control-sample-id", default="GSE281207_Tmie_KO",
+               help="sample_id of the negative-control contrast (labelled source_set=negative_control)")
+p.add_argument("--recall-kmax", type=int, default=200)
 args = p.parse_args()
 os.makedirs(args.out_dir, exist_ok=True)
-notes = ["I/R/D (identity / reprogramming / degradation-type indices): NOT computed — the exact definitions were not available.",
-         "Ridge baseline: NOT computed — definition not available. Baselines present: no_change, permuted, level_only, loco_mean."]
+notes = ["I/R/D (identity / rejuvenation / damage): computed by compute_ird.py (module12_metrics/ird_scores.tsv), not here.",
+         "Ridge baseline: NOT computed — a ridge fit needs a perturbation training set, which a single-model (LINGER-only) pipeline does not have. "
+         "Baselines present: no_change, permuted, level_only, loco_mean (+ pcc_centroid, the centroid-subtracted PCC-delta).",
+         "pcc_centroid: Systema-style definition approximated with the leave-one-contrast-out mean as centroid; confirm the exact definition with the supervisor."]
 
 # ------------------------------------------------------------------ load shift files
 files = []   # (scope, sample_id, group, path)
@@ -100,9 +113,26 @@ rep = pd.read_csv(args.validation_report_combined, sep="\t")
 verdict_of = {(r["scope"], r["sample_id"]): (r.get("pass_fail"), r.get("verdict_basis")) for _, r in rep.iterrows()}
 panel_rep = None
 if args.module9c_dir and os.path.exists(os.path.join(args.module9c_dir, "panel_report.tsv")):
-    panel_rep = pd.read_csv(os.path.join(args.module9c_dir, "panel_report.tsv"), sep="\t").set_index("panel_id")
+    panel_rep = pd.read_csv(os.path.join(args.module9c_dir, "panel_report.tsv"), sep="\t", dtype={"dimensions": str}).set_index("panel_id")
 
 # ------------------------------------------------------------------ expression metrics
+def _meta_for(sid, grp):
+    """source_set / perturb_class / dimensions / gene for one contrast (ADDED 2026-10-17)."""
+    if grp == "panel":
+        src = "xlsx_unit"
+    elif sid == args.negative_control_sample_id:
+        src = "negative_control"
+    else:
+        src = "supporting_held_out"
+    out = {"source_set": src, "perturb_class": "", "dimensions": "", "gene": ""}
+    if panel_rep is not None and sid in panel_rep.index:
+        r_ = panel_rep.loc[sid]
+        for k_, c_ in (("perturb_class", "perturb_class"), ("dimensions", "dimensions"), ("gene", "gene")):
+            if c_ in panel_rep.columns and pd.notna(r_.get(c_)):
+                out[k_] = r_[c_]
+    return out
+
+
 rows = []
 for (scope, sid), (d, grp) in data.items():
     r, pr, lv = d["real_shift"].values, d["predicted_shift"].values, d["level"].values
@@ -116,7 +146,7 @@ for (scope, sid), (d, grp) in data.items():
         m["verdict"] = verdict_of.get((scope, sid), (None, None))[0]
     elif panel_rep is not None and sid in panel_rep.index:
         m["verdict"] = panel_rep.loc[sid, "verdict"]
-    rows.append({"scope": scope, "contrast": sid, "group": grp, **m})
+    rows.append({"scope": scope, "contrast": sid, "group": grp, **_meta_for(sid, grp), **m})
 expr = pd.DataFrame(rows)
 expr.to_csv(os.path.join(args.out_dir, "metrics_expression.tsv"), sep="\t", index=False)
 print(f"metrics_expression.tsv: {len(expr)} rows")
@@ -202,5 +232,78 @@ else:
     notes.append("ranking metrics skipped: --screen-caps-tsv and/or --gold-tsv missing")
 pd.DataFrame(rrows).to_csv(os.path.join(args.out_dir, "metrics_ranking.tsv"), sep="\t", index=False)
 print(f"metrics_ranking.tsv: {len(rrows)} rows")
+
+# ------------------------------------------------------------------ cumulative recall curves (supervisor Fig 4A)
+crow = []
+if args.screen_caps_tsv and args.gold_tsv and os.path.exists(args.screen_caps_tsv) and os.path.exists(args.gold_tsv):
+    for scope in scopes:
+        sc = caps[(caps["scope"] == scope) & (caps["status"] == "ok")][["tf", "CAPS", "regulatory_centrality"]].copy()
+        if len(sc) < 50:
+            continue
+        for tier in sorted(tiers):
+            t = tiers[tier]
+            d = sc.copy()
+            if tier == "D":
+                d["is_member"] = d["tf"].isin(t.index)
+                cur = M.recall_curve(d, kmax=args.recall_kmax, seed=args.seed, use_abs=True)
+                if len(cur):
+                    crow.append(cur.assign(scope=scope, tier=tier, direction="membership", subset="all"))
+                continue
+            d["y"] = d["tf"].map(t["expected_ko_sign"])
+            for pos, label in ((1, "ko_raises_caps(+1)"), (-1, "ko_lowers_caps(-1)")):
+                cur = M.recall_curve(d, kmax=args.recall_kmax, seed=args.seed + (1 if pos > 0 else 2), positive=pos)
+                if len(cur):
+                    crow.append(cur.assign(scope=scope, tier=tier, direction=label, subset="all"))
+curve_df = pd.concat(crow, ignore_index=True) if crow else pd.DataFrame(
+    columns=["K", "recall", "null_mean", "null_p05", "null_p95", "ci_lo", "ci_hi", "n_pos", "n_ranked", "scope", "tier", "direction", "subset"])
+curve_df.to_csv(os.path.join(args.out_dir, "metrics_recall_curve.tsv"), sep="\t", index=False)
+print(f"metrics_recall_curve.tsv: {len(curve_df)} rows")
+
+# ------------------------------------------------------------------ GSE86204 interaction residual (EXPLORATORY)
+EPS_PREFIX = "GSE86204_Notch1_Ctnnb1_combo_P7__"
+EPS_NOTE = ("EXPLORATORY. real eps = real(double) - [real(notch1) + real(ctnnb1_activation)], in each arm's own units. "
+            "pred_additive uses the additive 'double_perturbation' arm, so its predicted eps is zero by construction (no interaction "
+            "is modelled). pred_joint uses the joint Rbpj+Tcf7+Lef1 pass, the only non-additive prediction, but that pass encodes all "
+            "three effectors as KNOCKOUTS whereas Ctnnb1 stabilisation is a Wnt GAIN, so its sign is not a clean counterpart; "
+            "treat any correlation as descriptive. 2-3 replicates per arm; CIs resample genes only.")
+erow = []
+need = ["notch1_ko_only", "ctnnb1_activation_only", "double_perturbation", "double_joint_effector_ko"]
+arms = {a: data.get(("population", EPS_PREFIX + a)) for a in need}
+if all(v is not None for v in arms.values()):
+    ser = {a: v[0].set_index("gene") for a, v in arms.items()}
+    genes = ser[need[0]].index
+    for a in need[1:]:
+        genes = genes.intersection(ser[a].index)
+    if len(genes) >= 200:
+        rr = lambda a: ser[a].loc[genes, "real_shift"].values
+        pp = lambda a: ser[a].loc[genes, "predicted_shift"].values
+        eps_real = rr("double_perturbation") - (rr("notch1_ko_only") + rr("ctnnb1_activation_only"))
+        eps_joint = pp("double_joint_effector_ko") - (pp("notch1_ko_only") + pp("ctnnb1_activation_only"))
+        eps_add = pp("double_perturbation") - (pp("notch1_ko_only") + pp("ctnnb1_activation_only"))
+        zr_ = M.zs(eps_real)
+        rng_ = np.random.default_rng(args.seed)
+
+        def _boot(vec):
+            vals = []
+            for _ in range(args.n_boot):
+                i = rng_.integers(0, len(genes), len(genes))
+                vals.append(M.pcc(M.zs(vec[i]), M.zs(eps_real[i])))
+            return [float(x) for x in np.nanpercentile(vals, [2.5, 97.5])] if np.isfinite(vals).any() else [np.nan, np.nan]
+
+        for name, vec in (("pred_joint", eps_joint), ("pred_additive", eps_add)):
+            const = np.std(vec) == 0
+            lo, hi = ([np.nan, np.nan] if const else _boot(vec))
+            erow.append({"n_genes": int(len(genes)), "real_eps_sd": float(np.std(eps_real)), "prediction": name,
+                         "pred_eps_sd": float(np.std(vec)), "pcc_eps": np.nan if const else M.pcc(M.zs(vec), zr_),
+                         "pcc_eps_ci_lo": lo, "pcc_eps_ci_hi": hi,
+                         "real_eps_to_sum_sd_ratio": float(np.std(eps_real) / max(np.std(rr("notch1_ko_only") + rr("ctnnb1_activation_only")), 1e-12)),
+                         "note": EPS_NOTE})
+    else:
+        notes.append(f"metrics_epsilon: only {len(genes)} genes shared by the four GSE86204 arms (need >= 200) — skipped")
+else:
+    notes.append("metrics_epsilon: not all four GSE86204 arm shift files found in module9c_panel — skipped")
+pd.DataFrame(erow, columns=["n_genes", "real_eps_sd", "prediction", "pred_eps_sd", "pcc_eps", "pcc_eps_ci_lo", "pcc_eps_ci_hi",
+                            "real_eps_to_sum_sd_ratio", "note"]).to_csv(os.path.join(args.out_dir, "metrics_epsilon.tsv"), sep="\t", index=False)
+print(f"metrics_epsilon.tsv: {len(erow)} rows")
 open(os.path.join(args.out_dir, "metrics_notes.txt"), "w").write("\n".join(notes) + "\n")
 print("\n".join(notes))

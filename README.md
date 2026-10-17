@@ -593,3 +593,34 @@ directional-gold ranking with matched-random nulls and bootstrap CIs). Gold tabl
 (Tier A cochlear curated is EMPTY until PMIDs are supplied in `resources/cochlear_curated_gold.tsv`).
 Not implemented because the definitions were not available: I/R/D indices and a ridge baseline. See `CHANGES.md` and `RUN_GUIDE.md`.
 The figure counts and correlation numbers quoted in older sections of this README are stale; the tables written by the pipeline are authoritative.
+
+---
+
+## Update 2026-10-17 (alignment with the supervisor's test set and figure plan; LINGER only)
+
+**New / changed tables** (all under `module9c_panel/` or `module12_metrics/`)
+
+| File | Content |
+|---|---|
+| `module9c_panel/coverage_table.tsv` | all 29 xlsx test units, one row each: LINGER status (`scored`, `scored_exploratory`, `epsilon_exploratory`, `tf_not_in_network`, `not_a_tf`, `not_run_array`), reason, Module 9c verdict. Source: `resources/xlsx_test_units.tsv`. |
+| `module9c_panel/coverage_summary.tsv` | dimension (1-7) x OE/KD counts: xlsx units vs units LINGER can score. |
+| `module12_metrics/metrics_expression.tsv` | + `source_set` (xlsx_unit / supporting_held_out / negative_control), `perturb_class`, `dimensions`, `gene`, `pcc_centroid` (+CI). |
+| `module12_metrics/metrics_recall_curve.tsv` | cumulative Recall@K (K = 1..200) per scope/tier/direction with bootstrap CI and matched-random null band. |
+| `module12_metrics/metrics_epsilon.tsv` | GSE86204 interaction residual (EXPLORATORY, see below). |
+| `module12_metrics/ird_scores.tsv`, `ird_validation*.tsv`, `ird_notes.txt` | I / R / D indices (below). |
+
+**I / R / D definitions** (documented choices following supervisor FIG.3; confirm with the supervisor)
+- **I (identity)** = mean z(shift) over the hair-cell panel minus mean z(shift) over the supporting-cell panel (`I_signed`); `I_abs` is the x-axis. Atoh1, Gfi1, Pou4f3 and the perturbed TF are excluded from the panels (circularity). Panels: `config['ird']`.
+- **D (damage)** = mean z(shift) over the union of Hallmark APOPTOSIS and UNFOLDED_PROTEIN_RESPONSE, minus IEG/stress genes and perturbed TFs.
+- **R (rejuvenation)** = minus the projection of the TF-activity shift on the unit aging vector (the negative of the CAPS sign-adjusted shift). **Population scope only, exploratory**; for OE units and population-only KOs the TF-activity shift is computed by `ird_tf_activity_extra_population` into `module12_metrics/ird/` (`module11_caps` is untouched).
+- Uncertainty: gene (R: TF) bootstrap CIs, plus a null from expression-decile-matched random gene sets (R: aging vector shuffled across TFs). A call needs CI excluding 0 AND estimate above the null 95th percentile. A damage call blocks any rejuvenation call.
+- Classes: non-specific damage; identity reprogramming; identity-preserving rejuvenation; no clear effect; no-op.
+- **Caveats**: calls are NOT corrected for multiple testing (about 1 in 20 pure-noise points will be called); CIs do not capture replicate variability; the expression floor is the 25th percentile of baseline (`ird.floor_pctile`).
+
+**GSE86204 interaction residual**: eps_real = double - (notch1 + ctnnb1_activation). The additive arm predicts eps = 0 by construction; the joint Rbpj+Tcf7+Lef1 pass encodes all three as KOs, which is sign-inconsistent with a Wnt gain. Exploratory, descriptive only.
+
+**Not implemented**: ridge baseline (no perturbation training set exists in a LINGER-only pipeline). `pcc_centroid` uses the leave-one-contrast-out mean as centroid (Systema-style approximation; definition to be confirmed).
+
+**Coverage under LINGER (of 29 xlsx units)**: 3 scored (Atoh1 OE, Pknox2 KO, Tbx2 KO), 3 scored-exploratory (GSE86204 arms), 1 epsilon-only, 4 TF not in the 586-TF network (Casz1 x2, Zbtb20, Prdm16), 16 not a TF, 2 array datasets not run.
+
+**Rerun** (do not delete `.done` markers): `module9c_all`, then `module12_metrics_all`. Expected new jobs only: `panel_coverage`, `module9c_aggregate`, `ird_tf_activity_extra_population`, `compute_ird`, `compute_metrics`. If the dry run (`-n`) lists `panel_validate_one`, Module 8 or 9b jobs, stop and report.

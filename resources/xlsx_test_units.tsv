@@ -1,0 +1,30 @@
+unit_id	dataset	omics_type	age	intervention	gene	perturb_class_xlsx	replicates_n	xlsx_dimensions	linger_status	linger_reason	linger_panel_ids
+GSE215951__P9_Kcnj2OE	GSE215951	bulk RNA-seq	P9	Kcnj2/Kir2.1 OE	Kcnj2	OE	3	1,2	not_a_tf	ion channel (Kir2.1), not a DNA-binding TF	
+GSE173217__Atoh1_OE_P33	GSE173217	scRNA-seq	P33	Atoh1 OE；P12–P13他莫昔芬诱导，P33取样	Atoh1	OE	未报告/未确认	1,4,6	scored		GSE173217_Atoh1_OE_P33
+GSE171921__P8_Pknox2KO	GSE171921	bulk RNA-seq	P8	Pknox2 KO	Pknox2	KD	5	1,2,7	scored		GSE171921_Pknox2_KO_P8
+GSE300215__P4_Casz1cKO	GSE300215	bulk RNA-seq	P4	Casz1 cKO（Sox10-Cre）	Casz1	KD	5	1,2,7	tf_not_in_network	TF, but not among the TFs of the trained network (Exp.tsv): not perturbed, descriptive only	GSE300215_Casz1_cKO_P4
+GSE196199__P10_Zbtb20cKO	GSE196199	bulk RNA-seq	P10	Zbtb20 cKO（Foxg1-Cre）	Zbtb20	KD	5	1,2	tf_not_in_network	TF, but not among the TFs of the trained network (Exp.tsv): not perturbed, descriptive only	GSE196199_Zbtb20_cKO_P10
+GSE193046__E14.5_Prdm16KO	GSE193046	bulk RNA-seq	E14.5	Prdm16 KO（null）	Prdm16	KD	3	1,2	tf_not_in_network	TF, but not among the TFs of the trained network (Exp.tsv): not perturbed, descriptive only	GSE193046_Prdm16_KO_E14_5
+GSE281437__E13.5_Trim71cKO	GSE281437	bulk RNA-seq	E13.5	Trim71 cKO（E8.5开始dox诱导）	Trim71	KD	未报告/未确认	1,2	not_a_tf	RNA-binding E3 ligase, not a TF	
+GSE304941__P7_Neu4KO	GSE304941	bulk RNA-seq	P7	Neu4 KO	Neu4	KD	未报告/未确认	1,2	not_a_tf	sialidase enzyme, not a TF	
+PRJNA1221644__PRJNA1221644_RNA_P60_cKO_vs_WT	PRJNA1221644	bulk RNA-seq	P60	Elavl1/HuR KO（cKO）	Elavl1	KD	4	1,2,6	not_a_tf	RNA-binding protein (HuR), not a TF	
+GSE176114__5mo_Dusp1KO	GSE176114	bulk RNA-seq	P140（20周）	Dusp1 KO	Dusp1	KD	3	1,2,4,6	not_a_tf	phosphatase, not a TF	
+GSE176114__8mo_Dusp1KO	GSE176114	bulk RNA-seq	P224（32周）	Dusp1 KO	Dusp1	KD	3	1,2,4,6	not_a_tf	phosphatase, not a TF	
+GSE246143__P15_Myo7acKO	GSE246143	bulk RNA-seq	P15	Myo7a cKO（Myo15-Cre）	Myo7a	KD	未报告/未确认	1,2,4	not_a_tf	motor protein, not a TF	
+GSE246143__P30_Myo7acKO	GSE246143	bulk RNA-seq	P30	Myo7a cKO（Myo15-Cre）	Myo7a	KD	未报告/未确认	1,2,4	not_a_tf	motor protein, not a TF	
+GSE86204__P7_Notch1KO	GSE86204	bulk RNA-seq	P7	Notch1 cKO	Notch1	KD	3	1,2,3,6,7	scored_exploratory	Notch1 is not a TF; scored through its effector Rbpj (additive approximation)	GSE86204_Notch1_Ctnnb1_combo_P7__notch1_ko_only
+GSE86204__P7_double	GSE86204	bulk RNA-seq	P7	Notch1 cKO + Ctnnb1稳定化激活	Notch1	KD	3	1,2,3,6,7	scored_exploratory	additive effector composite plus a joint Rbpj+Tcf7+Lef1 pass	GSE86204_Notch1_Ctnnb1_combo_P7__double_perturbation;GSE86204_Notch1_Ctnnb1_combo_P7__double_joint_effector_ko
+GSE292561__Fgfr3_KO_E16	GSE292561	scRNA-seq	E16.5（GEO原始E16，项目统一命名）	Fgfr3 KO	Fgfr3	KD	未报告/未确认	1,2,4,5,7	not_a_tf	receptor tyrosine kinase, not a TF	
+GSE279618__Casz1_KO_P10	GSE279618	scRNA-seq	P10	Casz1 cKO	Casz1	KD	未报告/未确认	1,4,5	tf_not_in_network	TF, but not among the TFs of the trained network (Exp.tsv): not perturbed, descriptive only	GSE279618_Casz1_KO_P10
+GSE199369__Tbx2_KO_P14	GSE199369	scRNA-seq	P14	Tbx2 cKO	Tbx2	KD	未报告/未确认	1,2,4	scored		GSE199369_Tbx2_KO_P14
+GSE217373__Ptch1_KO_E16_5	GSE217373	scRNA-seq	E16.5	Ptch1 cKO（Emx2Cre;Ptch1f/f）	Ptch1	KD	未报告/未确认	1,2,5	not_a_tf	receptor, not a TF	
+GSE18567__GSE18567_P3_KOvWT	GSE18567	array	P3	Chrna9 KO（α9烟碱受体亚基敲除）	Chrna9	KD	3	1	not_a_tf	nicotinic receptor subunit, not a TF	
+GSE18567__GSE18567_P7_KOvWT	GSE18567	array	P7	Chrna9 KO（α9烟碱受体亚基敲除）	Chrna9	KD	3	1	not_a_tf	nicotinic receptor subunit, not a TF	
+GSE18567__GSE18567_P13_KOvWT	GSE18567	array	P13	Chrna9 KO（α9烟碱受体亚基敲除）	Chrna9	KD	3	1	not_a_tf	nicotinic receptor subunit, not a TF	
+GSE18567__GSE18567_P60_KOvWT	GSE18567	array	P60	Chrna9 KO（α9烟碱受体亚基敲除）	Chrna9	KD	3	1	not_a_tf	nicotinic receptor subunit, not a TF	
+GSE149916__GSE149916_E15_KOvWT	GSE149916	array	E15.5（来源原标E15）	Meis2 KO（Pax2-Cre cKO）	Meis2	KD	未报告/未确认	1	not_run_array	TF, but the data are expression arrays; an array (log2 intensity) input mode is not implemented and no new datasets are in scope	
+GSE61406__GSE61406_E15_KOvWT	GSE61406	array	E15.5（来源原标E15）	Mycn/N-myc KO（Pax2-Cre cKO）	Mycn	KD	2	1	not_run_array	TF, but the data are expression arrays; an array (log2 intensity) input mode is not implemented and no new datasets are in scope	
+GSE72722__GSE72722_P15_KOvWT	GSE72722	array	P15	Pjvk KO（全身敲除）	Pjvk	KD	未报告/未确认	1,6	not_a_tf	pejvakin, not a TF	
+GSE70659__GSE70659_12月龄_KOvWT	GSE70659	array	12月龄	Cmah KO（全身敲除）	Cmah	KD	3	1,6	not_a_tf	enzyme, not a TF	
+GSE86204__P7_Ctnnb1activation	GSE86204	bulk RNA-seq	P7	Ctnnb1稳定化激活（GEO称b-catenin-OE；不是普通表达OE）	Ctnnb1	KD	3	3	scored_exploratory	Ctnnb1 is not a TF; scored through Tcf7+Lef1 effectors with sign -1 (additive approximation); xlsx lists it as KD but it is a gain-of-function	GSE86204_Notch1_Ctnnb1_combo_P7__ctnnb1_activation_only
+GSE86204__P7_interaction	GSE86204	bulk RNA-seq	P7	Notch1 cKO × Ctnnb1稳定化激活（交互项）	Notch1	KD	3	3	epsilon_exploratory	scored only as the interaction residual (metrics_epsilon.tsv); predicted epsilon is zero for the additive arm by construction	GSE86204_Notch1_Ctnnb1_combo_P7__double_perturbation

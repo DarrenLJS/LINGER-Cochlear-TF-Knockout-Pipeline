@@ -2383,6 +2383,12 @@ resources:
     vmem_mb: 16000
     runtime_min: 90
 
+  # ADDED 2026-10-17: I/R/D indices (gene-bootstrap + matched-random nulls over ~15 knockouts x 15 scopes + ~80 contrasts).
+  compute_ird:
+    slots: 1
+    vmem_mb: 16000
+    runtime_min: 120
+
   # --- Module 10 ---
   benchmark_grn_edges:
     slots: 1
@@ -2509,7 +2515,8 @@ caps:
 
 # ADDED 2026-10-15 (Stage 6): Module 12 metrics. gold_tsv is built once by setup_scripts/build_directional_gold.py
 # (Tier A is empty until you supply PMIDs). msigdb_dir is filled by setup_scripts/download_gold_standard.sh.
-# I/R/D indices and a ridge baseline are NOT implemented (definitions not available) - hook left on purpose.
+# I/R/D are computed by compute_ird.py (see the `ird:` block at the end of this file). A ridge baseline is NOT implemented (a single-model
+# pipeline has no perturbation training set to fit it on).
 metrics:
   gold_tsv: "resources/directional_gold.tsv"
   msigdb_dir: "/exports/eddie/scratch/s2906787/cochlear_datasets/gold_standard/msigdb"
@@ -2521,3 +2528,24 @@ metrics:
   gsea_perm: 500
   gsea_perm_large: 100
   min_tier_tfs: 10
+
+# ADDED 2026-10-17: Identity / Rejuvenation / Damage indices (workflow/scripts/compute_ird.py). These are DOCUMENTED CHOICES that follow the three
+# evidence lines of the supervisor's FIG.3 (identity: marker/regulon; rejuvenation: aging module; damage: apoptosis/stress/UPR); edit the panels
+# here to change them, then rerun module12_metrics_all (nothing upstream reruns).
+ird:
+  identity_panels:
+    # hair_cell: the supervisor's own FIG.3D hair-cell gene list (Myo7a Otof Pvalb Rasd2 Slc17a8 Insm1 Tomt Myo15 Cdh23 Tmc1 Cib2 Lhfpl5 Ush2a Adgrv1)
+    #            plus Myo6 and Slc26a5 (OHC, "Prestin").
+    hair_cell: [Myo7a, Myo6, Myo15, Otof, Pvalb, Rasd2, Slc17a8, Insm1, Tomt, Cdh23, Tmc1, Cib2, Lhfpl5, Ush2a, Adgrv1, Slc26a5]
+    # supporting_cell: config integration.marker_genes has only Sox2/Hes1; widened with standard supporting-cell genes.
+    supporting_cell: [Sox2, Hes1, Hes5, Prox1, Fgfr3, Slc1a3, Sox10]
+  # The perturbed TFs are removed from every panel (a knockout lowers its own transcript and would score itself).
+  exclude_genes: [Atoh1, Gfi1, Pou4f3]
+  # MSigDB mouse Hallmark sets (file: metrics.msigdb_dir / metrics.hallmark_gmt). caps.ieg_genes are removed from the damage panel.
+  damage_sets: [HALLMARK_APOPTOSIS, HALLMARK_UNFOLDED_PROTEIN_RESPONSE]
+  floor_pctile: 25          # genes below this percentile of baseline expression are not scored (the fig06 MD plots use 50; lower here because the identity panels are small)
+  min_tested_genes: 200
+  min_panel_genes: 3        # identity panels: genes that must survive the expression floor
+  min_damage_genes: 10
+  n_boot: 1000              # bootstrap over panel genes (TFs for R)
+  n_null: 1000              # expression-decile-matched random gene sets for the |I| and D nulls

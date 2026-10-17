@@ -16,7 +16,13 @@
 # needed. An arm's predicted shift is the additive composite sum_i sign_i * (KO_i - baseline) over its
 # `components`; one arm is also scored against a single joint Rbpj+Tcf7+Lef1 knockout pass.
 #
-# Outputs:  module9c_panel/{panel_id}_score.tsv   and   module9c_panel/panel_report.tsv
+# CHANGED 2026-10-17: panel_report.tsv gains `perturb_class` (OE / KD / mixed) and `dimensions` (the entry's test_dimensions, with dimension 3
+# removed from the single-arm units) so Module 12 can organise results by the supervisor's 7 dimensions with OE and KD kept apart. Both are
+# derived from keys that are already in the config (`direction`, `test_dimensions`), and they go into PANEL_META only, NOT into the loader
+# entry JSON, so no panel_validate_one job is invalidated. New rule `panel_coverage` writes coverage_table.tsv / coverage_summary.tsv:
+# every xlsx unit once, with its LINGER status and reason (resources/xlsx_test_units.tsv).
+#
+# Outputs:  module9c_panel/{panel_id}_score.tsv   module9c_panel/panel_report.tsv   module9c_panel/coverage_table.tsv
 # Targets:  snakemake module9c_all
 # =============================================================================
 
@@ -31,6 +37,22 @@ PANEL_ENTRIES = {}      # panel_id -> loader entry (with sample_id / check / pai
 PANEL_SPECS = {}        # panel_id -> check spec
 PANEL_META = {}         # panel_id -> dict for the report
 PANEL_DESCRIPTIVE = []  # rows for entries that are not perturbable
+
+_ARM_CLASS = {"ctnnb1_activation_only": "OE", "notch1_ko_only": "KD"}   # single arms; the double arms are "mixed" (KD + OE)
+_OE_WORDS = {"OE", "ACTIVATION", "CRISPRA", "OVEREXPRESSION"}
+
+
+def _perturb_class(direction):
+    ds = direction if isinstance(direction, (list, tuple)) else [direction]
+    cls = {"OE" if str(x).upper() in _OE_WORDS else "KD" for x in ds}
+    return cls.pop() if len(cls) == 1 else "mixed"
+
+
+def _dims(entry, arm=None):
+    dims = [str(x) for x in entry.get("test_dimensions", [])]
+    if arm in _ARM_CLASS:            # a single-arm unit cannot address the combination dimension
+        dims = [x for x in dims if x != "3"]
+    return ",".join(dims)
 
 
 def _panel_entry(base, sample_id, regex=None, baseline=None):
@@ -54,7 +76,8 @@ for _e in PANEL_CFG:
         PANEL_SPECS[_tid] = {"mode": "expression_shift", "ko_id": _sc["ko_id"], "sign": _sc["sign"],
                              "invert_pass": False, "top_k": 200}
         PANEL_META[_tid] = {"test_id": _tid, "dataset": _e["dataset"], "gene": _e["gene"], "arm": "",
-                            "eligibility": _elig, "exploratory": bool(_e.get("exploratory", False))}
+                            "eligibility": _elig, "exploratory": bool(_e.get("exploratory", False)),
+                            "perturb_class": _perturb_class(_e.get("direction")), "dimensions": _dims(_e)}
     elif _elig == "effectors_eligible":
         _ctrl_re = _e["combinatorial_arms"]["control"]["sample_column_regex"]
         _bl = {"sample_id": _tid + "__control", "path": _e["path"], "sample_column_regex": _ctrl_re}
@@ -65,10 +88,12 @@ for _e in PANEL_CFG:
             PANEL_SPECS[_pid] = {"mode": "expression_shift", "ko_id": _comps[0]["ko_id"], "sign": _comps[0]["sign"],
                                  "components": _comps, "invert_pass": False, "top_k": 200}
             PANEL_META[_pid] = {"test_id": _tid, "dataset": _e["dataset"], "gene": ",".join(_e["gene"]) if isinstance(_e["gene"], list) else _e["gene"],
-                                "arm": _arm, "eligibility": _elig, "exploratory": bool(_e.get("exploratory", True))}
+                                "arm": _arm, "eligibility": _elig, "exploratory": bool(_e.get("exploratory", True)),
+                                "perturb_class": _ARM_CLASS.get(_arm, "mixed"), "dimensions": _dims(_e, _arm)}
     else:
         PANEL_DESCRIPTIVE.append({"test_id": _tid, "dataset": _e["dataset"], "gene": _e["gene"], "arm": "",
-                                  "eligibility": _elig, "exploratory": False})
+                                  "eligibility": _elig, "exploratory": False,
+                                  "perturb_class": _perturb_class(_e.get("direction")), "dimensions": _dims(_e)})
 
 _PANEL_IDS = list(PANEL_ENTRIES.keys())
 _PANEL_ID_PATTERN = "|".join(re.escape(x) for x in _PANEL_IDS) if _PANEL_IDS else "(?!)"
@@ -157,6 +182,32 @@ rule module9c_aggregate:
         """
 
 
+rule panel_coverage:
+    # ADDED 2026-10-17: every supervisor-xlsx test unit once, with LINGER's status and the reason (see build_coverage_table.py).
+    input:
+        report = f"{MODULE9C_DIR}/panel_report.tsv",
+        units = "resources/xlsx_test_units.tsv",
+    output:
+        table = f"{MODULE9C_DIR}/coverage_table.tsv",
+        summary = f"{MODULE9C_DIR}/coverage_summary.tsv",
+    params:
+        out_dir = MODULE9C_DIR,
+    log:
+        f"{SCRATCH}/logs/09c_coverage.log",
+    resources:
+        runtime   = config["resources"]["module9_aggregate"]["runtime_min"],
+        sge_extra = sge_extra("module9_aggregate"),
+    shell:
+        r"""
+        set -euo pipefail
+        exec &> {log}
+        export PATH="{LINGER_ENV_BIN}:$PATH"
+        {LINGER_PYTHON} workflow/scripts/build_coverage_table.py \
+            --units-tsv {input.units} --panel-report {input.report} --out-dir {params.out_dir}
+        """
+
+
 rule module9c_all:
     input:
         f"{MODULE9C_DIR}/panel_report.tsv",
+        f"{MODULE9C_DIR}/coverage_table.tsv",

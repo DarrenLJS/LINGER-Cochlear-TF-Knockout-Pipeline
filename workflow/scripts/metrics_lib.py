@@ -58,6 +58,18 @@ def rel_rmse(zp, zr):
     return float(np.sqrt(np.mean((zp - zr) ** 2)))
 
 
+def pcc_centroid(zp, zr, zc):
+    """Systema-style centroid-subtracted PCC-delta (ADDED 2026-10-17).
+    The 'centroid' zc is the average perturbation effect: here the z-scored leave-one-contrast-out mean of the OTHER
+    contrasts' real shifts. Subtracting it from both the predicted and the real shift removes the part of the response
+    that is shared by every perturbation (a model can score a high plain PCC just by reproducing that), so what is left
+    is perturbation-SPECIFIC signal. Returns NaN when no centroid is available. The exact Systema definition should be
+    confirmed with the supervisor; this is the closest implementable form with a handful of contrasts."""
+    if zc is None:
+        return np.nan
+    return pcc(np.asarray(zp) - np.asarray(zc), np.asarray(zr) - np.asarray(zc))
+
+
 def deg_concordance(p, r, k):
     k = min(k, len(r))
     idx = np.argsort(-np.abs(r))[:k]
@@ -97,10 +109,12 @@ def contrast_metrics(r, p, level, loco, ks=(100, 300), n_perm=200, seed=0):
     if loco is not None and np.std(loco) > 0:
         zloco = zs(loco)
         out["loco_pcc"], out["loco_rel_rmse"] = pcc(zloco, zr), rel_rmse(zloco, zr)
+        out["pcc_centroid"] = pcc_centroid(zp, zr, zloco)
         for k in ks:
             out[f"loco_deg_conc@{k}"] = deg_concordance(zloco, r, k)
     else:
         out["loco_pcc"] = out["loco_rel_rmse"] = np.nan
+        out["pcc_centroid"] = np.nan
         for k in ks:
             out[f"loco_deg_conc@{k}"] = np.nan
     return out
@@ -125,6 +139,7 @@ def bootstrap_contrast(r, p, level, loco, ks=(100, 300), B=300, seed=0):
             zlo = zs(loco[i])
             base_pcc.append(pcc(zlo, zr))
             base_rm.append(rel_rmse(zlo, zr))
+            row["pcc_centroid"] = pcc_centroid(zp, zr, zlo)
         row["best_baseline_pcc"] = float(np.nanmax(base_pcc)) if not np.all(np.isnan(base_pcc)) else np.nan
         row["best_baseline_rel_rmse"] = float(np.nanmin(base_rm))
         row["d_pcc"] = row["pcc"] - row["best_baseline_pcc"]
@@ -255,6 +270,49 @@ def recall_at_k(score, y, k):
         return np.nan
     order = np.argsort(-np.asarray(score), kind="stable")[:k]
     return float(y[order].sum() / y.sum())
+
+
+def recall_curve(df, kmax=200, B_null=200, B_boot=300, seed=0, positive=1, use_abs=False, strata_col="regulatory_centrality"):
+    """Cumulative Recall@K for K = 1..kmax (ADDED 2026-10-17, for the supervisor's Fig 4A).
+    Same score / label construction as ranking_metrics. Returns a DataFrame with the observed curve, the matched-random
+    null (labels permuted within centrality deciles: mean and 5th/95th percentile) and a 95% bootstrap CI over TFs."""
+    d = df.dropna(subset=["CAPS"]).copy()
+    score = d["CAPS"].values * (-1.0 if positive == -1 else 1.0)
+    if use_abs:
+        score = np.abs(d["CAPS"].values)
+        y = d["is_member"].values.astype(bool)
+    else:
+        y = (d["y"].values == positive)
+    n = len(score)
+    if y.sum() == 0 or y.sum() == n:
+        return pd.DataFrame()
+    kmax = int(min(kmax, n))
+    q = pd.qcut(d[strata_col].rank(method="first"), 10, labels=False, duplicates="drop").values if strata_col in d else np.zeros(n)
+
+    def _curve(sc, yy):
+        order = np.argsort(-sc, kind="stable")
+        return np.cumsum(yy[order])[:kmax] / yy.sum()
+
+    obs = _curve(score, y)
+    rng = np.random.default_rng(seed)
+    groups = [np.where(q == s_)[0] for s_ in np.unique(q)]
+    nulls = np.empty((B_null, kmax))
+    for b in range(B_null):
+        yp = y.copy()
+        for g in groups:
+            yp[g] = rng.permutation(y[g])
+        nulls[b] = _curve(score, yp)
+    boots = []
+    for _ in range(B_boot):
+        i = rng.integers(0, n, n)
+        if y[i].sum() == 0:
+            continue
+        boots.append(_curve(score[i], y[i]))
+    boots = np.vstack(boots) if boots else np.full((1, kmax), np.nan)
+    return pd.DataFrame({"K": np.arange(1, kmax + 1), "recall": obs, "null_mean": nulls.mean(0),
+                         "null_p05": np.percentile(nulls, 5, axis=0), "null_p95": np.percentile(nulls, 95, axis=0),
+                         "ci_lo": np.nanpercentile(boots, 2.5, axis=0), "ci_hi": np.nanpercentile(boots, 97.5, axis=0),
+                         "n_pos": int(y.sum()), "n_ranked": int(n)})
 
 
 def wilson(k, n, z=1.96):
